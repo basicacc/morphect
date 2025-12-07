@@ -21,9 +21,8 @@
 #include "basic-block.h"
 #include "gimple-iterator.h"
 #include "tree-cfg.h"
-#include "stringpool.h"
-// value-range.h only exists in GCC 14+
-#if GCC_VERSION >= 14000
+// For make_ssa_name - need to include value-range.h before tree-ssanames.h on GCC 13+
+#if __GNUC__ >= 13
 #include "value-range.h"
 #endif
 #include "tree-ssanames.h"
@@ -36,11 +35,11 @@
 int plugin_is_GPL_compatible;
 
 static struct plugin_info morphect_plugin_info = {
-    .version = "1.0.1",
-    .help = "Morphect obfuscator plugin.\n"
-            "Options:\n"
-            "  -fplugin-arg-morphect_plugin-probability=<n>  Probability (0.0-1.0)\n"
-            "  -fplugin-arg-morphect_plugin-verbose          Enable verbose output\n"
+    "1.0.1",  // version
+    "Morphect obfuscator plugin.\n"
+    "Options:\n"
+    "  -fplugin-arg-morphect_plugin-probability=<n>  Probability (0.0-1.0)\n"
+    "  -fplugin-arg-morphect_plugin-verbose          Enable verbose output\n"  // help
 };
 
 namespace {
