@@ -29,7 +29,6 @@ coverage_html/
 Testing/
 test_*.exe
 *.log
-tests/
 
 # Generated files
 compile_commands.json
