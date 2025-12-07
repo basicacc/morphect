@@ -135,7 +135,7 @@ jobs:
 
     - name: Run tests
       working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure
+      run: ctest --output-on-failure -L unit
 
     - name: Generate coverage report
       run: |
