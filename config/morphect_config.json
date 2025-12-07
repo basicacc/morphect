@@ -1,0 +1,76 @@
+{
+  "obfuscation_settings": {
+    "global_probability": 0.85,
+    "preserve_functionality": true,
+    "enable_advanced_mba": true,
+    "mba_complexity_level": "high",
+    "enable_string_encoding": true
+  },
+  "string_encoding": {
+    "enabled": true,
+    "encoding_method": "xor",
+    "xor_key": 123,
+    "min_string_length": 3,
+    "decoder_function_name": "__morphect_decode_str",
+    "exclude_patterns": [
+      "usage:",
+      "error:",
+      "warning:"
+    ]
+  },
+  "mba_transformations": {
+    "add": {
+      "enabled": true,
+      "variants": [
+        "(a ^ b) + 2 * (a & b)",
+        "(a | b) + (a & b)",
+        "2 * (a | b) - (a ^ b)"
+      ],
+      "probabilities": [0.4, 0.3, 0.3]
+    },
+    "sub": {
+      "enabled": true,
+      "variants": [
+        "(a ^ b) - 2 * (~a & b)",
+        "(a | ~b) - (~a | b) + 1"
+      ],
+      "probabilities": [0.6, 0.4]
+    },
+    "xor": {
+      "enabled": true,
+      "variants": [
+        "(a | b) - (a & b)",
+        "(a + b) - 2 * (a & b)",
+        "(a | b) & ~(a & b)"
+      ],
+      "probabilities": [0.4, 0.3, 0.3]
+    },
+    "and": {
+      "enabled": true,
+      "variants": [
+        "(a | b) - (a ^ b)",
+        "~(~a | ~b)"
+      ],
+      "probabilities": [0.6, 0.4]
+    },
+    "or": {
+      "enabled": true,
+      "variants": [
+        "(a ^ b) + (a & b)",
+        "(a + b) - (a & b)",
+        "~(~a & ~b)"
+      ],
+      "probabilities": [0.4, 0.3, 0.3]
+    }
+  },
+  "control_flow": {
+    "cff_enabled": false,
+    "bogus_cf_enabled": false,
+    "opaque_predicates_enabled": false
+  },
+  "advanced": {
+    "nesting_depth": 1,
+    "use_fixed_seed": false,
+    "random_seed": 0
+  }
+}

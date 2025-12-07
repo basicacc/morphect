@@ -1,0 +1,59 @@
+# Build directories
+build/
+cmake*/
+docs/
+
+# IDE stuff
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled objects
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# GCC plugin artifacts
+*.gcno
+*.gcda
+*.gcov
+coverage.info
+coverage_html/
+
+# Test artifacts
+Testing/
+test_*.exe
+*.log
+tests/
+
+# Generated files
+compile_commands.json
+.cache/
+
+# Internal planning docs (not for public)
+morphect*.md
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+
+# Archives
+*.tar.gz
+*.zip
+
+# Debug symbols
+*.dSYM/
+*.pdb
