@@ -348,7 +348,7 @@ static void BM_OpaquePredicateSelection(benchmark::State& state) {
     OpaquePredicateLibrary predicates;
 
     for (auto _ : state) {
-        const auto& pred = predicates.getAlwaysTrue();
+        auto pred = predicates.getAlwaysTrue();
         benchmark::DoNotOptimize(pred);
     }
 }

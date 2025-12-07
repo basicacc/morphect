@@ -313,7 +313,7 @@ private:
 
     std::vector<std::string> applyRule(const IRRule& rule,
                                         const std::map<std::string, std::string>& vars,
-                                        const std::string& original) {
+                                        const std::string& /*original*/) {
         if (rule.replacements.empty()) return {};
 
         // Select replacement based on probability
