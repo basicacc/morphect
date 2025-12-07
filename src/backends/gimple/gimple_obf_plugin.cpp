@@ -22,8 +22,8 @@
 #include "gimple-iterator.h"
 #include "tree-cfg.h"
 #include "stringpool.h"
-// For make_ssa_name - need to include value-range.h before tree-ssanames.h on GCC 13+
-#if __GNUC__ >= 13
+// For make_ssa_name - need to include value-range.h before tree-ssanames.h on GCC 12+
+#if __GNUC__ >= 12
 #include "value-range.h"
 #endif
 #include "tree-ssanames.h"
