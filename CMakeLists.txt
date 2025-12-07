@@ -168,9 +168,10 @@ target_link_libraries(morphect_antidebug PUBLIC morphect_core)
 # GCC GIMPLE Plugin
 # ============================================================================
 if(MORPHECT_BUILD_GIMPLE_PLUGIN)
-    # Find GCC plugin directory
+    # Find GCC plugin directory using the actual C compiler (not just 'gcc')
+    # This ensures we use the correct plugin headers when CC=gcc-12/gcc-13/etc
     execute_process(
-        COMMAND gcc -print-file-name=plugin
+        COMMAND ${CMAKE_C_COMPILER} -print-file-name=plugin
         OUTPUT_VARIABLE GCC_PLUGIN_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
