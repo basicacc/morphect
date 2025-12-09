@@ -189,7 +189,7 @@ docs/             - detailed guides
 
 ## License
 
-MIT. Do whatever you want with it.
+Apache License v2
 
 ## Disclaimer
 
