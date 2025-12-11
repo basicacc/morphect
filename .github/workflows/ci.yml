@@ -172,7 +172,11 @@ jobs:
 
     strategy:
       matrix:
-        sanitizer: [address, undefined]
+        include:
+          - sanitizer: address
+            static_lib: -static-libasan
+          - sanitizer: undefined
+            static_lib: -static-libubsan
 
     steps:
     - uses: actions/checkout@v4
@@ -190,9 +194,9 @@ jobs:
         cmake -B ${{github.workspace}}/build \
           -G Ninja \
           -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }}" \
-          -DCMAKE_C_FLAGS="-fsanitize=${{ matrix.sanitizer }}" \
-          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${{ matrix.sanitizer }}" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} ${{ matrix.static_lib }}" \
+          -DCMAKE_C_FLAGS="-fsanitize=${{ matrix.sanitizer }} ${{ matrix.static_lib }}" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${{ matrix.sanitizer }} ${{ matrix.static_lib }}" \
           -DMORPHECT_BUILD_TESTS=ON \
           -DMORPHECT_BUILD_BENCHMARKS=OFF
 
