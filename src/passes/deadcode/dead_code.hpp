@@ -45,10 +45,36 @@ namespace deadcode {
 class LLVMCodeAnalyzer {
 public:
     /**
-     * Extract variable information from IR
+     * Check if a function is CFF-flattened (uses dispatcher pattern)
+     */
+    bool isCFFFlattened(const std::vector<std::string>& lines,
+                        size_t start_line, size_t end_line) const {
+        if (end_line > lines.size()) end_line = lines.size();
+        for (size_t i = start_line; i < end_line; i++) {
+            const auto& line = lines[i];
+            // CFF-flattened functions have dispatcher pattern
+            if (line.find("dispatcher:") != std::string::npos ||
+                line.find("%_cff_state") != std::string::npos ||
+                line.find("entry_flat:") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Extract variable information from IR (within a specific function scope)
+     *
+     * @param lines All IR lines
+     * @param start_line Starting line of the function (or 0 for all)
+     * @param end_line Ending line of the function (or lines.size() for all)
+     * @param only_allocas If true, only extract alloca variables (for CFF-flattened code)
      */
     std::vector<VariableInfo> extractVariables(
-        const std::vector<std::string>& lines) const {
+        const std::vector<std::string>& lines,
+        size_t start_line = 0,
+        size_t end_line = SIZE_MAX,
+        bool only_allocas = false) const {
 
         std::vector<VariableInfo> vars;
         std::unordered_set<std::string> seen;
@@ -58,7 +84,10 @@ public:
         // Pattern: i32 %name or i64 %name etc.
         std::regex typed_var_re(R"((i\d+|float|double)\s+%([a-zA-Z_][a-zA-Z0-9_]*))");
 
-        for (const auto& line : lines) {
+        if (end_line > lines.size()) end_line = lines.size();
+
+        for (size_t i = start_line; i < end_line; i++) {
+            const auto& line = lines[i];
             // Skip comments and empty lines
             if (line.empty() || line[0] == ';') continue;
 
@@ -68,34 +97,87 @@ public:
             if (std::regex_search(line, match, assign_re)) {
                 std::string name = "%" + match[1].str();
                 if (seen.find(name) == seen.end()) {
+                    bool is_alloca = (line.find("alloca") != std::string::npos);
+
+                    // In CFF-flattened code, only use allocas (they dominate all states)
+                    // Skip non-alloca variables as they may be defined in different states
+                    if (only_allocas && !is_alloca) {
+                        continue;
+                    }
+
                     seen.insert(name);
 
                     VariableInfo var;
                     var.name = name;
                     var.type = inferType(line);
-                    var.is_pointer = (line.find("alloca") != std::string::npos ||
-                                      line.find("*") != std::string::npos);
+                    var.is_pointer = is_alloca || (line.find("*") != std::string::npos);
                     vars.push_back(var);
                 }
             }
 
-            // Find typed variables in operands
-            std::string::const_iterator searchStart(line.cbegin());
-            while (std::regex_search(searchStart, line.cend(), match, typed_var_re)) {
-                std::string name = "%" + match[2].str();
-                if (seen.find(name) == seen.end()) {
-                    seen.insert(name);
+            // Only extract typed variables in operands if not in only_allocas mode
+            // These are SSA values that may not dominate the insertion point
+            if (!only_allocas) {
+                std::string::const_iterator searchStart(line.cbegin());
+                while (std::regex_search(searchStart, line.cend(), match, typed_var_re)) {
+                    std::string name = "%" + match[2].str();
+                    if (seen.find(name) == seen.end()) {
+                        seen.insert(name);
 
-                    VariableInfo var;
-                    var.name = name;
-                    var.type = match[1].str();
-                    vars.push_back(var);
+                        VariableInfo var;
+                        var.name = name;
+                        var.type = match[1].str();
+                        vars.push_back(var);
+                    }
+                    searchStart = match.suffix().first;
                 }
-                searchStart = match.suffix().first;
             }
         }
 
         return vars;
+    }
+
+    /**
+     * Find function boundaries (start and end line for each function)
+     * Returns map of function_start_line -> (function_start, function_end)
+     */
+    std::vector<std::pair<size_t, size_t>> findFunctionBoundaries(
+        const std::vector<std::string>& lines) const {
+
+        std::vector<std::pair<size_t, size_t>> boundaries;
+        size_t func_start = 0;
+        bool in_function = false;
+
+        for (size_t i = 0; i < lines.size(); i++) {
+            const std::string& line = lines[i];
+
+            if (line.find("define ") != std::string::npos) {
+                in_function = true;
+                func_start = i;
+                continue;
+            }
+            if (line == "}" && in_function) {
+                boundaries.push_back({func_start, i});
+                in_function = false;
+            }
+        }
+
+        return boundaries;
+    }
+
+    /**
+     * Get function boundary containing the given line
+     */
+    std::pair<size_t, size_t> getFunctionBoundary(
+        const std::vector<std::pair<size_t, size_t>>& boundaries,
+        size_t line_num) const {
+
+        for (const auto& bound : boundaries) {
+            if (line_num >= bound.first && line_num <= bound.second) {
+                return bound;
+            }
+        }
+        return {0, SIZE_MAX};  // Fallback
     }
 
     /**
@@ -205,7 +287,7 @@ public:
 
         // Analyze the code
         LLVMCodeAnalyzer analyzer;
-        auto variables = analyzer.extractVariables(lines);
+        auto function_boundaries = analyzer.findFunctionBoundaries(lines);
         auto insertion_points = analyzer.findInsertionPoints(lines);
         auto function_names = analyzer.extractFunctionNames(lines);
 
@@ -253,6 +335,22 @@ public:
             if (GlobalRandom::nextDouble() > config.probability) {
                 continue;
             }
+
+            // Extract variables only from the function containing this insertion point
+            // This ensures dead code doesn't use variables from other functions
+            auto func_bounds = analyzer.getFunctionBoundary(function_boundaries,
+                                                            static_cast<size_t>(insert_point));
+
+            // IMPORTANT: We don't use real variables in dead code generation.
+            // Using existing SSA values can violate SSA domination rules since we don't
+            // have full dominator analysis. A variable defined in one branch may not
+            // dominate the insertion point. Safe approach: use constants only.
+            //
+            // This is especially critical for:
+            // 1. CFF-flattened code (states don't dominate each other)
+            // 2. Branches in normal CFG (variables in if/else don't dominate later code)
+            // 3. Variable splitting (splits create new SSA values in their local scope)
+            std::vector<VariableInfo> variables;  // Empty = generators use constants only
 
             // Select a generator based on weights
             double r = GlobalRandom::nextDouble();

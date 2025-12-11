@@ -96,7 +96,7 @@ struct MBAPassConfig {
             }
             if (mba.has("mult")) {
                 enable_mult = mba["mult"].has("enabled") ?
-                    mba["mult"]["enabled"].asBool(false) : false;  // Disabled by default
+                    mba["mult"]["enabled"].asBool(true) : true;  // Enabled by default
             }
         }
     }
@@ -167,6 +167,11 @@ public:
             }
 
             logger_.debug("Nesting depth {}: {} transformations", depth, transformations);
+        }
+
+        // Renumber SSA values to fix sequential numbering after transformations
+        if (total_transformations > 0) {
+            renumberSSA(lines);
         }
 
         incrementStat("total_transformations", total_transformations);

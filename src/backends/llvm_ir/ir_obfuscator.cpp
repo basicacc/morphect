@@ -6,6 +6,14 @@
  * This is a standalone tool that reads LLVM IR (.ll files),
  * applies obfuscation transformations, and outputs obfuscated IR.
  *
+ * Supported transformations:
+ *   - MBA (Mixed Boolean Arithmetic) - pattern-based
+ *   - CFF (Control Flow Flattening)
+ *   - Bogus Control Flow
+ *   - Variable Splitting
+ *   - String Encoding
+ *   - Dead Code Insertion
+ *
  * Usage:
  *   morphect-ir --config config.json input.ll output.ll
  *
@@ -17,6 +25,10 @@
  */
 
 #include "morphect.hpp"
+#include "passes/cff/cff.hpp"
+#include "passes/data/data.hpp"
+#include "passes/deadcode/deadcode.hpp"
+#include "passes/mba/mba_pass.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -25,6 +37,7 @@
 #include <string>
 #include <regex>
 #include <map>
+#include <algorithm>
 
 using namespace morphect;
 
@@ -134,6 +147,259 @@ public:
         logger_.info("======================================");
     }
 
+    // Enable/disable individual passes
+    void setEnableMBA(bool enable) { enable_mba_ = enable; }
+    void setEnableCFF(bool enable) { enable_cff_ = enable; }
+    void setEnableBogus(bool enable) { enable_bogus_ = enable; }
+    void setEnableVariableSplit(bool enable) { enable_var_split_ = enable; }
+    void setEnableStringEncoding(bool enable) { enable_string_enc_ = enable; }
+    void setEnableDeadCode(bool enable) { enable_dead_code_ = enable; }
+
+    /**
+     * Full obfuscation pipeline with all enabled passes
+     */
+    std::string obfuscateFull(const std::string& ir_code) {
+        std::string result = ir_code;
+
+        // Convert to line vector for pass-based transformations
+        std::vector<std::string> lines = splitLines(result);
+
+        // Step 1: Apply MBA transformations (using LLVMMBAPass)
+        if (enable_mba_) {
+            lines = applyMBA(lines);
+        }
+
+        // Step 2: Apply CFF (Control Flow Flattening)
+        if (enable_cff_) {
+            lines = applyCFF(lines);
+        }
+
+        // Step 3: Apply Bogus Control Flow
+        if (enable_bogus_) {
+            lines = applyBogusControlFlow(lines);
+        }
+
+        // Step 4: Apply Variable Splitting
+        if (enable_var_split_) {
+            lines = applyVariableSplitting(lines);
+        }
+
+        // Step 5: Apply String Encoding
+        if (enable_string_enc_) {
+            lines = applyStringEncoding(lines);
+        }
+
+        // Step 6: Apply Dead Code Insertion
+        if (enable_dead_code_) {
+            lines = applyDeadCode(lines);
+        }
+
+        return joinLines(lines);
+    }
+
+private:
+    // Pass enable flags
+    bool enable_mba_ = false;
+    bool enable_cff_ = false;
+    bool enable_bogus_ = false;
+    bool enable_var_split_ = false;
+    bool enable_string_enc_ = false;
+    bool enable_dead_code_ = false;
+
+    /**
+     * Apply MBA (Mixed Boolean Arithmetic) pass
+     */
+    std::vector<std::string> applyMBA(const std::vector<std::string>& lines) {
+        logger_.info("Applying MBA transformations...");
+
+        mba::LLVMMBAPass mba_pass;
+        mba::MBAPassConfig mba_config;
+        mba_config.global.enabled = true;
+        mba_config.global.probability = global_probability_;
+        mba_config.global.nesting_depth = 1;  // Single pass - nesting causes correctness issues
+        mba_pass.initializeMBA(mba_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = mba_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto mba_stats = mba_pass.getStatistics();
+            for (const auto& [key, val] : mba_stats) {
+                stats_.increment("mba_" + key, val);
+            }
+            logger_.info("MBA applied successfully");
+        }
+
+        return result;
+    }
+
+    /**
+     * Apply Control Flow Flattening pass
+     */
+    std::vector<std::string> applyCFF(const std::vector<std::string>& lines) {
+        logger_.info("Applying Control Flow Flattening...");
+
+        cff::LLVMCFFPass cff_pass;
+        cff::CFFConfig cff_config;
+        cff_config.enabled = true;
+        cff_config.probability = global_probability_;
+        cff_config.shuffle_states = true;
+        cff_config.add_bogus_cases = true;
+        cff_pass.setCFFConfig(cff_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = cff_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto cff_stats = cff_pass.getStatistics();
+            for (const auto& [key, val] : cff_stats) {
+                stats_.increment("cff_" + key, val);
+            }
+            logger_.info("CFF applied successfully");
+        }
+
+        return result;
+    }
+
+    /**
+     * Apply Bogus Control Flow pass
+     */
+    std::vector<std::string> applyBogusControlFlow(const std::vector<std::string>& lines) {
+        logger_.info("Applying Bogus Control Flow...");
+
+        cff::LLVMBogusPass bogus_pass;
+        cff::BogusConfig bogus_config;
+        bogus_config.enabled = true;
+        bogus_config.probability = global_probability_;
+        bogus_config.generate_dead_code = true;
+        bogus_config.use_real_variables = true;
+        bogus_pass.setBogusConfig(bogus_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = bogus_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto bogus_stats = bogus_pass.getStatistics();
+            for (const auto& [key, val] : bogus_stats) {
+                stats_.increment("bogus_" + key, val);
+            }
+            logger_.info("Bogus CF applied successfully");
+        }
+
+        return result;
+    }
+
+    /**
+     * Apply Variable Splitting pass
+     */
+    std::vector<std::string> applyVariableSplitting(const std::vector<std::string>& lines) {
+        logger_.info("Applying Variable Splitting...");
+
+        data::LLVMVariableSplittingPass split_pass;
+        data::VariableSplittingConfig split_config;
+        split_config.enabled = true;
+        split_config.probability = global_probability_;
+        split_config.split_phi_nodes = true;
+        split_config.max_splits_per_function = 5;
+        // Exclude internal obfuscation variables from splitting
+        split_config.exclude_patterns = {
+            "%_op_",      // Opaque predicate variables
+            "%_cff_",     // CFF state variables
+            "%_dead",     // Dead code variables
+            "%split_",    // Already split variables
+            "%reconst_",  // Reconstruction variables
+            "%_arith"     // Dead code arithmetic
+        };
+        split_pass.configure(split_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = split_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto split_stats = split_pass.getStatistics();
+            for (const auto& [key, val] : split_stats) {
+                stats_.increment("varsplit_" + key, val);
+            }
+            logger_.info("Variable splitting applied successfully");
+        }
+
+        return result;
+    }
+
+    /**
+     * Apply String Encoding pass
+     */
+    std::vector<std::string> applyStringEncoding(const std::vector<std::string>& lines) {
+        logger_.info("Applying String Encoding...");
+
+        data::LLVMStringEncodingPass str_pass;
+        data::StringEncodingConfig str_config;
+        str_config.enabled = true;
+        str_config.method = data::StringEncodingMethod::XOR;
+        str_config.min_string_length = 3;
+        str_pass.configure(str_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = str_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto str_stats = str_pass.getStatistics();
+            for (const auto& [key, val] : str_stats) {
+                stats_.increment("strenc_" + key, val);
+            }
+            logger_.info("String encoding applied successfully");
+        }
+
+        return result;
+    }
+
+    /**
+     * Apply Dead Code Insertion pass
+     */
+    std::vector<std::string> applyDeadCode(const std::vector<std::string>& lines) {
+        logger_.info("Applying Dead Code Insertion...");
+
+        deadcode::LLVMDeadCodePass dead_pass;
+        deadcode::DeadCodeConfig dead_config;
+        dead_config.enabled = true;
+        dead_config.probability = global_probability_;
+        dead_config.max_blocks = 5;
+        dead_pass.setDeadCodeConfig(dead_config);
+
+        std::vector<std::string> result = lines;
+        auto transform_result = dead_pass.transformIR(result);
+
+        if (transform_result == TransformResult::Success) {
+            auto dead_stats = dead_pass.getStatistics();
+            for (const auto& [key, val] : dead_stats) {
+                stats_.increment("deadcode_" + key, val);
+            }
+            logger_.info("Dead code insertion applied successfully");
+        }
+
+        return result;
+    }
+
+    std::vector<std::string> splitLines(const std::string& text) {
+        std::vector<std::string> lines;
+        std::istringstream stream(text);
+        std::string line;
+        while (std::getline(stream, line)) {
+            lines.push_back(line);
+        }
+        return lines;
+    }
+
+    std::string joinLines(const std::vector<std::string>& lines) {
+        std::ostringstream result;
+        for (size_t i = 0; i < lines.size(); i++) {
+            result << lines[i];
+            if (i < lines.size() - 1) result << "\n";
+        }
+        result << "\n";
+        return result.str();
+    }
+
 private:
     Logger logger_;
     Statistics stats_;
@@ -189,12 +455,48 @@ private:
             global_probability_ = settings["global_probability"].asDouble(0.85);
         }
 
+        // Parse pass enable flags from control_flow section
+        if (json.has("control_flow")) {
+            const auto& cf = json["control_flow"];
+            if (cf.has("cff_enabled")) {
+                enable_cff_ = cf["cff_enabled"].asBool(false);
+            }
+            if (cf.has("bogus_cf_enabled")) {
+                enable_bogus_ = cf["bogus_cf_enabled"].asBool(false);
+            }
+        }
+
+        // Parse data obfuscation settings
+        if (json.has("data_obfuscation")) {
+            const auto& data = json["data_obfuscation"];
+            if (data.has("variable_splitting")) {
+                enable_var_split_ = data["variable_splitting"].asBool(false);
+            }
+            if (data.has("string_encoding")) {
+                enable_string_enc_ = data["string_encoding"].asBool(false);
+            }
+        }
+
+        // Parse dead code settings
+        if (json.has("dead_code")) {
+            const auto& dc = json["dead_code"];
+            if (dc.has("enabled")) {
+                enable_dead_code_ = dc["enabled"].asBool(false);
+            }
+        }
+
         // Parse transformation rules
         if (json.has("ir_transformations")) {
             parseTransformations(json["ir_transformations"]);
         }
 
         logger_.info("Loaded {} transformation rules", rules_.size());
+        logger_.info("CFF: {}, Bogus: {}, VarSplit: {}, StrEnc: {}, DeadCode: {}",
+                     enable_cff_ ? "on" : "off",
+                     enable_bogus_ ? "on" : "off",
+                     enable_var_split_ ? "on" : "off",
+                     enable_string_enc_ ? "on" : "off",
+                     enable_dead_code_ ? "on" : "off");
     }
 
     void parseTransformations(const JsonValue& transforms) {
@@ -378,12 +680,19 @@ void printUsage(const char* program) {
     std::cout << "Options:" << std::endl;
     std::cout << "  --config <file>       Configuration file (JSON)" << std::endl;
     std::cout << "  --probability <n>     Global transformation probability (0.0-1.0)" << std::endl;
+    std::cout << "  --mba                 Enable MBA (Mixed Boolean Arithmetic) transformations" << std::endl;
+    std::cout << "  --cff                 Enable Control Flow Flattening" << std::endl;
+    std::cout << "  --bogus               Enable Bogus Control Flow" << std::endl;
+    std::cout << "  --varsplit            Enable Variable Splitting" << std::endl;
+    std::cout << "  --strenc              Enable String Encoding" << std::endl;
+    std::cout << "  --deadcode            Enable Dead Code Insertion" << std::endl;
+    std::cout << "  --all                 Enable all obfuscation passes" << std::endl;
     std::cout << "  --verbose             Enable verbose output" << std::endl;
     std::cout << "  --help                Show this help" << std::endl;
     std::cout << std::endl;
     std::cout << "Workflow:" << std::endl;
     std::cout << "  1. clang -S -emit-llvm -O0 source.c -o source.ll" << std::endl;
-    std::cout << "  2. " << program << " --config config.json source.ll obfuscated.ll" << std::endl;
+    std::cout << "  2. " << program << " --all source.ll obfuscated.ll" << std::endl;
     std::cout << "  3. llc obfuscated.ll -o obfuscated.s" << std::endl;
     std::cout << "  4. gcc obfuscated.s -o output" << std::endl;
 }
@@ -394,6 +703,12 @@ int main(int argc, char* argv[]) {
     std::string output_file;
     double probability = -1;
     bool verbose = false;
+    bool enable_mba = false;
+    bool enable_cff = false;
+    bool enable_bogus = false;
+    bool enable_varsplit = false;
+    bool enable_strenc = false;
+    bool enable_deadcode = false;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -403,6 +718,25 @@ int main(int argc, char* argv[]) {
             config_file = argv[++i];
         } else if (arg == "--probability" && i + 1 < argc) {
             probability = std::stod(argv[++i]);
+        } else if (arg == "--mba") {
+            enable_mba = true;
+        } else if (arg == "--cff") {
+            enable_cff = true;
+        } else if (arg == "--bogus") {
+            enable_bogus = true;
+        } else if (arg == "--varsplit") {
+            enable_varsplit = true;
+        } else if (arg == "--strenc") {
+            enable_strenc = true;
+        } else if (arg == "--deadcode") {
+            enable_deadcode = true;
+        } else if (arg == "--all") {
+            enable_mba = true;
+            enable_cff = true;
+            enable_bogus = true;
+            enable_varsplit = true;
+            enable_strenc = true;
+            enable_deadcode = true;
         } else if (arg == "--verbose" || arg == "-v") {
             verbose = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -443,6 +777,14 @@ int main(int argc, char* argv[]) {
         obfuscator.setGlobalProbability(probability);
     }
 
+    // Apply command-line pass enables (override config)
+    if (enable_mba) obfuscator.setEnableMBA(true);
+    if (enable_cff) obfuscator.setEnableCFF(true);
+    if (enable_bogus) obfuscator.setEnableBogus(true);
+    if (enable_varsplit) obfuscator.setEnableVariableSplit(true);
+    if (enable_strenc) obfuscator.setEnableStringEncoding(true);
+    if (enable_deadcode) obfuscator.setEnableDeadCode(true);
+
     // Read input
     std::ifstream input(input_file);
     if (!input.is_open()) {
@@ -456,8 +798,8 @@ int main(int argc, char* argv[]) {
 
     LOG_INFO("Read {} bytes from {}", ir_code.size(), input_file);
 
-    // Obfuscate
-    std::string obfuscated = obfuscator.obfuscate(ir_code);
+    // Obfuscate using full pipeline (MBA + CFF + Bogus + VarSplit + StrEnc + DeadCode)
+    std::string obfuscated = obfuscator.obfuscateFull(ir_code);
 
     // Write output
     std::ofstream output(output_file);

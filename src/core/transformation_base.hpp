@@ -15,6 +15,9 @@
 #include <vector>
 #include <unordered_map>
 #include <functional>
+#include <map>
+#include <regex>
+#include <sstream>
 
 namespace morphect {
 
@@ -227,6 +230,27 @@ public:
      * @return Result of transformation
      */
     virtual TransformResult transformIR(std::vector<std::string>& lines) = 0;
+
+protected:
+    /**
+     * Renumber sequential SSA values in LLVM IR to fix numbering after transformations
+     * LLVM requires numbered SSA values (%0, %1, %2...) to be sequential within each function.
+     * Named values (%foo, %bar) don't need renumbering.
+     *
+     * @param lines Vector of IR lines to renumber (modified in place)
+     */
+    static void renumberSSA(std::vector<std::string>& lines);
+
+    /**
+     * Renumber SSA values within a single function
+     *
+     * @param func_lines Lines of a single function (excluding define line and closing brace)
+     * @param first_arg_num The first argument number (usually 0, or num_args for numbered args)
+     * @return Renumbered function lines
+     */
+    static std::vector<std::string> renumberFunctionSSA(
+        const std::vector<std::string>& func_lines,
+        int first_arg_num);
 };
 
 /**
@@ -249,6 +273,186 @@ public:
         const std::string& arch
     ) = 0;
 };
+
+// ============================================================================
+// SSA Renumbering Implementation (inline for header-only)
+// ============================================================================
+
+inline void LLVMTransformationPass::renumberSSA(std::vector<std::string>& lines) {
+    std::vector<std::string> result;
+    result.reserve(lines.size());
+
+    bool in_function = false;
+    std::vector<std::string> func_lines;
+    std::string func_define_line;
+    int num_args = 0;
+
+    for (size_t i = 0; i < lines.size(); i++) {
+        const std::string& line = lines[i];
+
+        // Detect function start: "define ... @name(args) ... {"
+        if (line.find("define ") != std::string::npos && line.find("{") != std::string::npos) {
+            in_function = true;
+            func_define_line = line;
+            func_lines.clear();
+
+            // Count numbered arguments in the define line
+            // Arguments look like: i32 noundef %0, i32 noundef %1, ...
+            // or: i32 %arg1, i32 %arg2, ...
+            std::regex arg_pattern(R"(%(\d+))");
+            auto args_begin = std::sregex_iterator(line.begin(), line.end(), arg_pattern);
+            auto args_end = std::sregex_iterator();
+            num_args = 0;
+            for (auto it = args_begin; it != args_end; ++it) {
+                int arg_num = std::stoi((*it)[1].str());
+                if (arg_num >= num_args) {
+                    num_args = arg_num + 1;
+                }
+            }
+            continue;
+        }
+
+        // Detect function end
+        if (in_function && line.find("}") != std::string::npos &&
+            (line.find("define") == std::string::npos) &&
+            (line.find("switch") == std::string::npos || line.find("]") != std::string::npos)) {
+            // Check if this is really the end of function (not inside a switch)
+            // Count braces
+            int brace_count = 0;
+            for (const auto& fl : func_lines) {
+                for (char c : fl) {
+                    if (c == '{') brace_count++;
+                    else if (c == '}') brace_count--;
+                }
+            }
+            // If braces are balanced, this is end of function
+            if (brace_count <= 0) {
+                // Renumber the function
+                auto renumbered = renumberFunctionSSA(func_lines, num_args);
+
+                // Add the define line and renumbered body
+                result.push_back(func_define_line);
+                for (const auto& fl : renumbered) {
+                    result.push_back(fl);
+                }
+                result.push_back(line);  // closing brace
+
+                in_function = false;
+                func_lines.clear();
+                continue;
+            }
+        }
+
+        if (in_function) {
+            func_lines.push_back(line);
+        } else {
+            result.push_back(line);
+        }
+    }
+
+    // Handle case where function wasn't closed (shouldn't happen in valid IR)
+    if (in_function && !func_lines.empty()) {
+        result.push_back(func_define_line);
+        for (const auto& fl : func_lines) {
+            result.push_back(fl);
+        }
+    }
+
+    lines = std::move(result);
+}
+
+inline std::vector<std::string> LLVMTransformationPass::renumberFunctionSSA(
+    const std::vector<std::string>& func_lines,
+    int first_arg_num) {
+
+    std::vector<std::string> result;
+    result.reserve(func_lines.size());
+
+    // Map from old numbered SSA value to new numbered SSA value
+    std::map<int, int> number_map;
+
+    // Reserve entry block number (implicit entry block takes the first number after args)
+    int next_number = first_arg_num + 1;
+
+    // First pass: identify all numbered definitions and basic block labels
+    std::regex def_pattern(R"(%(\d+)\s*=)");
+    std::regex block_label_pattern(R"(^(\d+):)");  // Basic block label at start of line
+
+    for (const auto& line : func_lines) {
+        // Check for basic block labels (e.g., "7:" at start of line)
+        std::smatch block_match;
+        if (std::regex_search(line, block_match, block_label_pattern)) {
+            int old_num = std::stoi(block_match[1].str());
+            if (number_map.find(old_num) == number_map.end()) {
+                number_map[old_num] = next_number++;
+            }
+        }
+
+        // Check for value definitions
+        std::sregex_iterator iter(line.begin(), line.end(), def_pattern);
+        std::sregex_iterator end;
+
+        for (; iter != end; ++iter) {
+            int old_num = std::stoi((*iter)[1].str());
+            if (number_map.find(old_num) == number_map.end()) {
+                number_map[old_num] = next_number++;
+            }
+        }
+    }
+
+    // Second pass: replace all numbered references
+    std::regex num_ref(R"(%(\d+))");
+    std::regex block_ref(R"(label\s+%(\d+))");  // References to block labels
+
+    for (const auto& line : func_lines) {
+        std::string new_line = line;
+
+        // First, handle basic block label at start of line (e.g., "7:" -> "5:")
+        std::smatch block_match;
+        if (std::regex_search(new_line, block_match, block_label_pattern)) {
+            int old_num = std::stoi(block_match[1].str());
+            auto it = number_map.find(old_num);
+            if (it != number_map.end()) {
+                std::string old_label = block_match[0].str();
+                std::string new_label = std::to_string(it->second) + ":";
+                new_line = std::regex_replace(new_line, block_label_pattern, new_label,
+                                               std::regex_constants::format_first_only);
+            }
+        }
+
+        // Build a list of replacements for %N patterns
+        std::vector<std::pair<size_t, std::pair<size_t, std::string>>> replacements;
+        std::string::const_iterator search_start = new_line.begin();
+        std::smatch match;
+
+        while (std::regex_search(search_start, new_line.cend(), match, num_ref)) {
+            int old_num = std::stoi(match[1].str());
+            size_t match_pos = match.position() + (search_start - new_line.begin());
+            size_t match_len = match[0].length();
+
+            // Check if this number is in our map
+            auto it = number_map.find(old_num);
+            if (it != number_map.end()) {
+                std::string new_ref = "%" + std::to_string(it->second);
+                replacements.push_back({match_pos, {match_len, new_ref}});
+            }
+
+            search_start = match.suffix().first;
+        }
+
+        // Apply replacements in reverse order to maintain positions
+        for (auto it = replacements.rbegin(); it != replacements.rend(); ++it) {
+            size_t pos = it->first;
+            size_t len = it->second.first;
+            const std::string& replacement = it->second.second;
+            new_line.replace(pos, len, replacement);
+        }
+
+        result.push_back(new_line);
+    }
+
+    return result;
+}
 
 } // namespace morphect
 

@@ -346,6 +346,14 @@ private:
     std::vector<PhiNodeInfo> phi_nodes_;
     std::unordered_map<std::string, std::string> phi_alloca_map_;   // PHI result -> alloca var
     std::unordered_map<std::string, std::string> phi_replacement_map_;  // PHI result -> loaded var
+
+    // Entry block allocas (moved to entry_flat for dominance)
+    std::vector<std::string> entry_allocas_;
+
+    // Return value tracking
+    std::string return_type_;           // Type of return value (void, i32, etc.)
+    std::string return_alloca_;         // Alloca for storing return value
+    bool has_return_value_ = false;     // Whether function returns a value
 };
 
 /**

@@ -200,9 +200,6 @@ inline std::vector<std::string> LLVMBogusControlFlow::transform(
         return lines;
     }
 
-    // Find available variables
-    auto vars = findVariables(lines);
-
     // Find insertion points (after regular instructions, before terminators)
     auto insertion_points = findInsertionPoints(lines);
 
@@ -234,14 +231,48 @@ inline std::vector<std::string> LLVMBogusControlFlow::transform(
     std::vector<std::string> result = lines;
 
     for (size_t point : selected_points) {
-        // Get the instruction at this point
-        std::vector<std::string> real_code = {result[point]};
+        // Find i32 VALUE variables defined BEFORE this point
+        // Skip allocas (they're pointers), only include loads and arithmetic results
+        std::vector<std::string> available_vars;
+        for (size_t j = 0; j < point; j++) {
+            const std::string& line = result[j];
 
-        // Generate bogus branch
-        auto bogus_code = insertBogusBranch(real_code, vars, config);
+            // Skip alloca - results are pointers, not values
+            if (line.find(" = alloca ") != std::string::npos) continue;
 
-        // Replace the instruction with the bogus version
-        result.erase(result.begin() + point);
+            // Skip store - no result
+            if (line.find("store ") != std::string::npos) continue;
+
+            size_t eq_pos = line.find(" = ");
+            if (eq_pos != std::string::npos) {
+                size_t start = line.find('%');
+                if (start != std::string::npos && start < eq_pos) {
+                    std::string var = line.substr(start, eq_pos - start);
+                    size_t end = var.find_first_of(" \t");
+                    if (end != std::string::npos) {
+                        var = var.substr(0, end);
+                    }
+                    // Only add i32 VALUE variables (from loads, arithmetic, etc.)
+                    // Load pattern: %x = load i32, ptr %y
+                    // Arith pattern: %x = add i32 %a, %b
+                    if (line.find("load i32") != std::string::npos ||
+                        line.find("add i32") != std::string::npos ||
+                        line.find("sub i32") != std::string::npos ||
+                        line.find("mul i32") != std::string::npos ||
+                        line.find("and i32") != std::string::npos ||
+                        line.find("or i32") != std::string::npos ||
+                        line.find("xor i32") != std::string::npos) {
+                        available_vars.push_back(var);
+                    }
+                }
+            }
+        }
+
+        // Generate bogus branch (insert dead path before this point)
+        std::vector<std::string> empty_real;  // Not used in new approach
+        auto bogus_code = insertBogusBranch(empty_real, available_vars, config);
+
+        // INSERT the bogus code BEFORE the target instruction (don't replace)
         result.insert(result.begin() + point, bogus_code.begin(), bogus_code.end());
     }
 
@@ -249,56 +280,50 @@ inline std::vector<std::string> LLVMBogusControlFlow::transform(
 }
 
 inline std::vector<std::string> LLVMBogusControlFlow::insertBogusBranch(
-    const std::vector<std::string>& real_code,
-    const std::vector<std::string>& available_vars,
+    const std::vector<std::string>& /* real_code - not used anymore */,
+    const std::vector<std::string>& /* available_vars - not used */,
     const BogusConfig& config) {
+
+    // New approach: Insert a fake branch that's never taken
+    // The real code continues normally, we just add an unreachable dead path
 
     std::vector<std::string> output;
 
-    // Get variables for predicate
-    std::string var1 = available_vars.empty() ? "0" :
-        available_vars[GlobalRandom::nextInt(0, static_cast<int>(available_vars.size()) - 1)];
-    std::string var2 = available_vars.size() < 2 ? var1 :
-        available_vars[GlobalRandom::nextInt(0, static_cast<int>(available_vars.size()) - 1)];
+    // Use constants for opaque predicate (safest approach)
+    std::string const1 = std::to_string(GlobalRandom::nextInt(1, 1000));
+    std::string const2 = std::to_string(GlobalRandom::nextInt(1, 1000));
 
     // Generate opaque predicate (always true)
-    auto [pred_code, pred_var] = predicates_.generateAlwaysTrue(var1, var2);
+    auto [pred_code, pred_var] = predicates_.generateAlwaysTrue(const1, const2);
 
     // Labels
-    std::string real_label = nextLabel("real");
+    std::string continue_label = nextLabel("continue");
     std::string fake_label = nextLabel("fake");
-    std::string merge_label = nextLabel("merge");
 
     // Insert predicate evaluation
     for (const auto& line : pred_code) {
         output.push_back(line);
     }
 
-    // Conditional branch (predicate is always true, so real path always taken)
-    output.push_back("  br i1 " + pred_var + ", label %" + real_label + ", label %" + fake_label);
-    output.push_back("");
-
-    // Real block (always executed)
-    output.push_back(real_label + ":");
-    for (const auto& line : real_code) {
-        output.push_back(line);
-    }
-    output.push_back("  br label %" + merge_label);
+    // Conditional branch (predicate is always true, so continue path always taken)
+    output.push_back("  br i1 " + pred_var + ", label %" + continue_label + ", label %" + fake_label);
     output.push_back("");
 
     // Fake block (never executed)
     output.push_back(fake_label + ":");
     if (config.generate_dead_code) {
-        auto dead_code = dead_code_gen_.generateLLVM(available_vars, config.dead_code_lines);
+        std::vector<std::string> empty_vars;
+        auto dead_code = dead_code_gen_.generateLLVM(empty_vars, config.dead_code_lines);
         for (const auto& line : dead_code) {
             output.push_back(line);
         }
     }
-    output.push_back("  br label %" + merge_label);
+    // Dead path jumps back to continue (or we could use unreachable)
+    output.push_back("  br label %" + continue_label);
     output.push_back("");
 
-    // Merge block
-    output.push_back(merge_label + ":");
+    // Continue label - real code continues here
+    output.push_back(continue_label + ":");
 
     return output;
 }
@@ -307,8 +332,34 @@ inline std::vector<std::string> LLVMBogusControlFlow::findVariables(
     const std::vector<std::string>& lines) {
 
     std::vector<std::string> vars;
+    bool in_function = false;
+    int brace_depth = 0;
 
     for (const auto& line : lines) {
+        // Track function boundaries
+        if (line.find("define ") != std::string::npos) {
+            in_function = true;
+            brace_depth = 0;
+            for (char c : line) {
+                if (c == '{') brace_depth++;
+            }
+            continue;
+        }
+
+        // Track brace depth
+        for (char c : line) {
+            if (c == '{') brace_depth++;
+            if (c == '}') brace_depth--;
+        }
+
+        if (in_function && brace_depth <= 0) {
+            in_function = false;
+            continue;
+        }
+
+        // Only look for variables inside functions
+        if (!in_function) continue;
+
         // Look for SSA assignments: %name = ...
         size_t eq_pos = line.find(" = ");
         if (eq_pos != std::string::npos) {
@@ -335,11 +386,46 @@ inline std::vector<size_t> LLVMBogusControlFlow::findInsertionPoints(
     const std::vector<std::string>& lines) {
 
     std::vector<size_t> points;
+    bool in_function = false;
+    int brace_depth = 0;
+    bool at_block_start = false;
+    bool found_in_block = false;
+    bool skip_entry_block = true;  // Skip first block (entry) in each function
 
     for (size_t i = 0; i < lines.size(); i++) {
         const std::string& line = lines[i];
 
-        // Skip empty lines, labels, terminators
+        // Track function boundaries
+        if (line.find("define ") != std::string::npos) {
+            in_function = true;
+            brace_depth = 0;
+            at_block_start = false;  // Will be set true after skipping entry allocas
+            found_in_block = false;
+            skip_entry_block = true;
+            // Count braces on define line
+            for (char c : line) {
+                if (c == '{') brace_depth++;
+            }
+            continue;
+        }
+
+        // Track brace depth
+        for (char c : line) {
+            if (c == '{') brace_depth++;
+            if (c == '}') brace_depth--;
+        }
+
+        // Check if we've exited the function
+        if (in_function && brace_depth <= 0) {
+            in_function = false;
+            at_block_start = false;
+            continue;
+        }
+
+        // Only consider points inside functions
+        if (!in_function) continue;
+
+        // Skip empty lines
         if (line.empty()) continue;
 
         std::string trimmed = line;
@@ -347,24 +433,59 @@ inline std::vector<size_t> LLVMBogusControlFlow::findInsertionPoints(
         if (start == std::string::npos) continue;
         trimmed = trimmed.substr(start);
 
-        // Skip labels
-        if (trimmed.back() == ':') continue;
+        // Track basic blocks (labels) - mark that we just entered a new block
+        // Labels can be numeric like "7:" or named like "entry:"
+        // Format: "labelname:" possibly followed by spaces/comments
+        size_t colon_pos = trimmed.find(':');
+        if (colon_pos != std::string::npos && colon_pos > 0) {
+            // Check if everything before the colon is alphanumeric (valid label)
+            std::string potential_label = trimmed.substr(0, colon_pos);
+            bool is_label = true;
+            for (char c : potential_label) {
+                if (!std::isalnum(c) && c != '_' && c != '.') {
+                    is_label = false;
+                    break;
+                }
+            }
+            if (is_label) {
+                at_block_start = true;
+                found_in_block = false;
+                skip_entry_block = false;  // After first label, we're past entry block
+                continue;
+            }
+        }
 
-        // Skip terminators
-        if (trimmed.find("ret ") == 0) continue;
-        if (trimmed.find("br ") == 0) continue;
-        if (trimmed.find("switch ") == 0) continue;
-        if (trimmed.find("unreachable") == 0) continue;
+        // Skip comments
+        if (trimmed[0] == ';') continue;
+
+        // Skip terminators - these end basic blocks
+        if (trimmed.find("ret ") == 0 || trimmed.find("ret void") == 0 ||
+            trimmed.find("br ") == 0 || trimmed.find("switch ") == 0 ||
+            trimmed.find("unreachable") == 0 || trimmed.find("invoke ") == 0) {
+            at_block_start = false;
+            found_in_block = false;
+            continue;
+        }
 
         // Skip phi nodes (must be at start of block)
-        if (trimmed.find("phi ") != std::string::npos) continue;
+        if (trimmed.find(" phi ") != std::string::npos) continue;
 
-        // Skip function markers
-        if (trimmed.find("define ") == 0) continue;
-        if (trimmed.find("}") != std::string::npos) continue;
+        // Skip alloca (should be at function entry)
+        if (trimmed.find(" = alloca ") != std::string::npos) continue;
 
-        // This is a good insertion point
-        points.push_back(i);
+        // Skip entry block - bogus flow there could break function prologue
+        if (skip_entry_block) continue;
+
+        // Find first suitable instruction after block label
+        if (at_block_start && !found_in_block) {
+            // Skip stores at the very start of blocks (common pattern)
+            if (trimmed.find("store ") == 0) continue;
+
+            // This is a good insertion point
+            found_in_block = true;
+            at_block_start = false;
+            points.push_back(i);
+        }
     }
 
     return points;

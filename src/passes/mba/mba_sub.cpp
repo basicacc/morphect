@@ -73,23 +73,7 @@ std::vector<std::string> LLVMMBASub::applyIR(const std::string& line,
             result.push_back(indent + dest + " = sub " + type + " " + t1 + ", " + t4);
             break;
         }
-        case 1:  // (a | ~b) - (~a | b) + 1
-        {
-            // %t1 = xor type %b, -1        ; ~b
-            // %t2 = or type %a, %t1        ; a | ~b
-            // %t3 = xor type %a, -1        ; ~a
-            // %t4 = or type %t3, %b        ; ~a | b
-            // %t5 = sub type %t2, %t4
-            // %dest = add type %t5, 1
-            result.push_back(indent + t1 + " = xor " + type + " " + op2 + ", -1");
-            result.push_back(indent + t2 + " = or " + type + " " + op1 + ", " + t1);
-            result.push_back(indent + t3 + " = xor " + type + " " + op1 + ", -1");
-            result.push_back(indent + t4 + " = or " + type + " " + t3 + ", " + op2);
-            result.push_back(indent + t5 + " = sub " + type + " " + t2 + ", " + t4);
-            result.push_back(indent + dest + " = add " + type + " " + t5 + ", 1");
-            break;
-        }
-        case 2:  // a + (~b + 1) - two's complement
+        case 1:  // a + (~b + 1) - two's complement
         {
             // %t1 = xor type %b, -1        ; ~b
             // %t2 = add type %t1, 1        ; ~b + 1 = -b
@@ -99,7 +83,7 @@ std::vector<std::string> LLVMMBASub::applyIR(const std::string& line,
             result.push_back(indent + dest + " = add " + type + " " + op1 + ", " + t2);
             break;
         }
-        case 3:  // ~(~a + b)
+        case 2:  // ~(~a + b)
         {
             // %t1 = xor type %a, -1        ; ~a
             // %t2 = add type %t1, %b       ; ~a + b
@@ -109,7 +93,7 @@ std::vector<std::string> LLVMMBASub::applyIR(const std::string& line,
             result.push_back(indent + dest + " = xor " + type + " " + t2 + ", -1");
             break;
         }
-        case 4:  // (a & ~b) - (~a & b)
+        case 3:  // (a & ~b) - (~a & b)
         default:
         {
             // %t1 = xor type %b, -1        ; ~b

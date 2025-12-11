@@ -64,9 +64,9 @@
     }
   },
   "control_flow": {
-    "cff_enabled": false,
-    "bogus_cf_enabled": false,
-    "opaque_predicates_enabled": false
+    "cff_enabled": true,
+    "bogus_cf_enabled": true,
+    "opaque_predicates_enabled": true
   },
   "advanced": {
     "nesting_depth": 1,

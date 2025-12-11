@@ -1418,24 +1418,10 @@ TEST_F(MBASubIRTest, Variant0_XorMinus2NotAAndB) {
     EXPECT_TRUE(result[4].find(" = sub ") != std::string::npos);
 }
 
-TEST_F(MBASubIRTest, Variant1_OrNotBMinusOrNotA) {
-    // Variant 1: (a | ~b) - (~a | b) + 1
+TEST_F(MBASubIRTest, Variant1_TwosComplement) {
+    // Variant 1: a + (~b + 1)
     std::string line = "  %result = sub i32 %a, %b";
     auto result = sub_transform.applyIR(line, 1, config);
-
-    ASSERT_EQ(6u, result.size());
-    EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~b
-    EXPECT_TRUE(result[1].find(" = or ") != std::string::npos);   // a | ~b
-    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // ~a
-    EXPECT_TRUE(result[3].find(" = or ") != std::string::npos);   // ~a | b
-    EXPECT_TRUE(result[4].find(" = sub ") != std::string::npos);
-    EXPECT_TRUE(result[5].find(" = add ") != std::string::npos);  // + 1
-}
-
-TEST_F(MBASubIRTest, Variant2_TwosComplement) {
-    // Variant 2: a + (~b + 1)
-    std::string line = "  %result = sub i32 %a, %b";
-    auto result = sub_transform.applyIR(line, 2, config);
 
     ASSERT_EQ(3u, result.size());
     EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~b
@@ -1443,10 +1429,10 @@ TEST_F(MBASubIRTest, Variant2_TwosComplement) {
     EXPECT_TRUE(result[2].find(" = add ") != std::string::npos);  // a + (-b)
 }
 
-TEST_F(MBASubIRTest, Variant3_NotNotAPlusB) {
-    // Variant 3: ~(~a + b)
+TEST_F(MBASubIRTest, Variant2_NotNotAPlusB) {
+    // Variant 2: ~(~a + b)
     std::string line = "  %result = sub i32 %a, %b";
-    auto result = sub_transform.applyIR(line, 3, config);
+    auto result = sub_transform.applyIR(line, 2, config);
 
     ASSERT_EQ(3u, result.size());
     EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~a
@@ -1454,10 +1440,10 @@ TEST_F(MBASubIRTest, Variant3_NotNotAPlusB) {
     EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // NOT
 }
 
-TEST_F(MBASubIRTest, Variant4_AAndNotBMinusNotAAndB) {
-    // Variant 4: (a & ~b) - (~a & b)
+TEST_F(MBASubIRTest, Variant3_AAndNotBMinusNotAAndB) {
+    // Variant 3: (a & ~b) - (~a & b)
     std::string line = "  %result = sub i32 %a, %b";
-    auto result = sub_transform.applyIR(line, 4, config);
+    auto result = sub_transform.applyIR(line, 3, config);
 
     ASSERT_EQ(5u, result.size());
     EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~b
@@ -1468,7 +1454,7 @@ TEST_F(MBASubIRTest, Variant4_AAndNotBMinusNotAAndB) {
 }
 
 TEST_F(MBASubIRTest, DefaultVariant_OutOfRange) {
-    // Out of range should use default (variant 4)
+    // Out of range should use default (variant 3)
     std::string line = "  %result = sub i32 %a, %b";
     auto result = sub_transform.applyIR(line, 99, config);
 

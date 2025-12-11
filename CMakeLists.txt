@@ -39,11 +39,10 @@ option(MORPHECT_COVERAGE "Enable code coverage" OFF)
 
 # Compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
-if(NOT MORPHECT_COVERAGE)
-    set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG -fsanitize=address,undefined")
-else()
-    set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-endif()
+# Note: Sanitizers are NOT enabled by default in Debug builds.
+# Use the CI sanitizers job or pass -DCMAKE_CXX_FLAGS="-fsanitize=address" explicitly.
+# This prevents issues with ASan runtime preloading during test discovery.
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 
@@ -224,6 +223,9 @@ if(MORPHECT_BUILD_IR_OBFUSCATOR)
         morphect_core
         morphect_mba
         morphect_data
+        morphect_cff
+        morphect_deadcode
+        morphect_control_flow
     )
 
     if(MORPHECT_INSTALL)
@@ -297,6 +299,7 @@ if(MORPHECT_BUILD_TESTS)
             tests/unit/test_antidisasm.cpp
             tests/unit/test_antidebug.cpp
             tests/unit/test_coverage.cpp
+            tests/unit/test_assembly.cpp
         )
 
         target_link_libraries(morphect_test PRIVATE
@@ -313,7 +316,12 @@ if(MORPHECT_BUILD_TESTS)
         )
 
         include(GoogleTest)
-        gtest_discover_tests(morphect_test PROPERTIES LABELS "unit")
+        # Use PRE_TEST discovery mode to avoid running the test executable at configure time
+        # This prevents issues with sanitizers (ASan/UBSan) that require proper preloading
+        gtest_discover_tests(morphect_test
+            PROPERTIES LABELS "unit"
+            DISCOVERY_MODE PRE_TEST
+        )
 
         # Integration tests (if source files exist)
         if(EXISTS "${CMAKE_SOURCE_DIR}/tests/integration/test_gimple.cpp")
@@ -334,7 +342,10 @@ if(MORPHECT_BUILD_TESTS)
                 gtest_main
             )
 
-            gtest_discover_tests(morphect_integration_test PROPERTIES LABELS "integration")
+            gtest_discover_tests(morphect_integration_test
+                PROPERTIES LABELS "integration"
+                DISCOVERY_MODE PRE_TEST
+            )
         endif()
 
         # Regression tests (if source files exist)
@@ -355,7 +366,10 @@ if(MORPHECT_BUILD_TESTS)
                 gtest_main
             )
 
-            gtest_discover_tests(morphect_regression_test PROPERTIES LABELS "regression")
+            gtest_discover_tests(morphect_regression_test
+                PROPERTIES LABELS "regression"
+                DISCOVERY_MODE PRE_TEST
+            )
         endif()
 
     else()

@@ -54,11 +54,11 @@ public:
     std::string getOperation() const override { return "sub"; }
 
     std::vector<MBAVariant> getVariants() const override {
+        // Note: Removed or_complement variant - it was mathematically incorrect
         return {
-            MBAVariant("xor_not_and", "(a ^ b) - 2 * (~a & b)", 0.25),
-            MBAVariant("or_complement", "(a | ~b) - (~a | b) + 1", 0.2),
-            MBAVariant("twos_complement", "a + (~b + 1)", 0.2),
-            MBAVariant("not_add", "~(~a + b)", 0.2),
+            MBAVariant("xor_not_and", "(a ^ b) - 2 * (~a & b)", 0.3),
+            MBAVariant("twos_complement", "a + (~b + 1)", 0.3),
+            MBAVariant("not_add", "~(~a + b)", 0.25),
             MBAVariant("diff_exclusive", "(a & ~b) - (~a & b)", 0.15)
         };
     }

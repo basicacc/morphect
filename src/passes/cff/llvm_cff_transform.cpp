@@ -18,6 +18,10 @@ CFFResult LLVMCFFTransformation::flatten(const CFGInfo& cfg, const CFFConfig& co
     phi_nodes_.clear();
     phi_alloca_map_.clear();
     phi_replacement_map_.clear();
+    entry_allocas_.clear();  // Clear entry block allocas
+    has_return_value_ = false;
+    return_type_ = "void";
+    return_alloca_ = "%_cff_retval";
 
     // Validate
     if (cfg.blocks.empty()) {
@@ -30,16 +34,48 @@ CFFResult LLVMCFFTransformation::flatten(const CFGInfo& cfg, const CFFConfig& co
         return result;
     }
 
-    // Check for exception handling - we can still flatten but need special handling
-    bool has_eh = cfg.has_exception_handling;
-    if (has_eh) {
-        logger_.debug("Function has exception handling - applying special CFF strategy");
+    // Check for exception handling - skip functions with invoke/landingpad
+    // Exception handling has strict structural requirements that conflict with CFF
+    if (cfg.has_exception_handling) {
+        logger_.debug("Function has exception handling - skipping CFF (invoke/landingpad not supported)");
+        result.error = "Function has exception handling (invoke/landingpad) - cannot flatten";
+        return result;
     }
 
     result.original_blocks = static_cast<int>(cfg.blocks.size());
 
-    // First pass: identify all PHI nodes
+    // First pass: identify all PHI nodes and return type
     collectPhiNodes(cfg);
+
+    // Determine return type from exit blocks
+    for (const auto& block : cfg.blocks) {
+        if (block.is_exit && block.terminator.find("ret ") != std::string::npos) {
+            // Extract return type from terminator: "ret i32 %val" or "ret void"
+            std::regex ret_pattern(R"(ret\s+(\w+)(\s+.+)?)");
+            std::smatch match;
+            if (std::regex_search(block.terminator, match, ret_pattern)) {
+                return_type_ = match[1].str();
+                if (return_type_ != "void") {
+                    has_return_value_ = true;
+                }
+            }
+            break;
+        }
+    }
+
+    // Extract allocas from the original entry block - they must be in the new entry
+    // block to dominate all uses across all states
+    for (const auto& block : cfg.blocks) {
+        if (block.is_entry) {
+            for (const auto& line : block.code) {
+                // Match alloca instructions
+                if (line.find(" = alloca ") != std::string::npos) {
+                    entry_allocas_.push_back(line);
+                }
+            }
+            break;
+        }
+    }
 
     // Assign state values
     auto states = assignStates(cfg, config);
@@ -54,8 +90,20 @@ CFFResult LLVMCFFTransformation::flatten(const CFGInfo& cfg, const CFFConfig& co
 
     // Entry block: initialize state and jump to dispatcher
     output.push_back("entry_flat:");
+
+    // First, add allocas from the original entry block (they must dominate all uses)
+    for (const auto& alloca_line : entry_allocas_) {
+        output.push_back(alloca_line);
+    }
+
+    // State variable alloca
     output.push_back("  %" + config.state_var_name + " = alloca i32");
     output.push_back("  store i32 0, i32* %" + config.state_var_name);
+
+    // Return value alloca (if function returns a value)
+    if (has_return_value_) {
+        output.push_back("  " + return_alloca_ + " = alloca " + return_type_);
+    }
 
     // Generate allocas for PHI variables
     auto phi_allocas = generatePhiHandling(cfg, states);
@@ -91,29 +139,18 @@ CFFResult LLVMCFFTransformation::flatten(const CFGInfo& cfg, const CFFConfig& co
     output.push_back("end_state:");
     output.push_back("  ; Function completed");
 
-    // If there are exit blocks with return values, we need to handle them
-    // For now, generate a placeholder return
-    bool has_return = false;
-    std::string return_type = "void";
-    for (const auto& block : cfg.blocks) {
-        if (block.is_exit && block.terminator.find("ret ") != std::string::npos) {
-            has_return = true;
-            // Extract return type from terminator
-            std::regex ret_pattern(R"(ret\s+(\w+))");
-            std::smatch match;
-            if (std::regex_search(block.terminator, match, ret_pattern)) {
-                return_type = match[1].str();
-            }
-            break;
-        }
-    }
-
-    if (return_type == "void") {
+    // Return the appropriate value
+    if (return_type_ == "void") {
         output.push_back("  ret void");
+    } else if (has_return_value_) {
+        // Load the stored return value and return it
+        std::string ret_loaded = nextTemp();
+        output.push_back("  " + ret_loaded + " = load " + return_type_ +
+                        ", " + return_type_ + "* " + return_alloca_);
+        output.push_back("  ret " + return_type_ + " " + ret_loaded);
     } else {
-        // Need to preserve return value - simplified handling
-        output.push_back("  ; Return value handling needed");
-        output.push_back("  ret " + return_type + " 0  ; placeholder");
+        // Fallback: return default value (shouldn't happen if analysis is correct)
+        output.push_back("  ret " + return_type_ + " 0  ; fallback");
     }
 
     result.transformed_code = output;
@@ -175,10 +212,15 @@ std::vector<std::string> LLVMCFFTransformation::generateCase(
     auto phi_loads = generatePhiLoads(block);
     output.insert(output.end(), phi_loads.begin(), phi_loads.end());
 
-    // Copy original block code (without terminator, and skip PHI nodes)
+    // Copy original block code (without terminator, skip PHI nodes, and skip allocas for entry block)
     for (const auto& line : block.code) {
         // Skip PHI instructions (they're handled separately)
         if (line.find(" phi ") != std::string::npos) {
+            continue;
+        }
+
+        // Skip alloca instructions for entry block (they were moved to entry_flat)
+        if (block.is_entry && line.find(" = alloca ") != std::string::npos) {
             continue;
         }
 
@@ -254,16 +296,18 @@ std::vector<std::string> LLVMCFFTransformation::generateStateUpdate(
         output.push_back("  store i32 " + std::to_string(end_state) +
                         ", i32* %" + config.state_var_name + "  ; exit");
 
-        // Handle return value if needed
+        // Handle return value if needed - store it to the return alloca
         if (block.terminator.find("ret ") != std::string::npos &&
             block.terminator.find("ret void") == std::string::npos) {
-            // Extract return value and store it
-            std::regex ret_val(R"(ret\s+\w+\s+(.+))");
+            // Extract return type and value from terminator: "ret i32 %val" or "ret i32 0"
+            std::regex ret_val(R"(ret\s+(\w+)\s+(.+))");
             std::smatch match;
             if (std::regex_search(block.terminator, match, ret_val)) {
-                std::string ret_value = match[1].str();
-                // Would need to store return value for later use
-                output.push_back("  ; Return value: " + ret_value);
+                std::string ret_type = match[1].str();
+                std::string ret_value = match[2].str();
+                // Store the return value for retrieval at end_state
+                output.push_back("  store " + ret_type + " " + ret_value +
+                                ", " + ret_type + "* " + return_alloca_);
             }
         }
 

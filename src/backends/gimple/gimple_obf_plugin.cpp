@@ -211,6 +211,45 @@ bool transform_or(gimple_stmt_iterator* gsi, gimple* stmt) {
     return true;
 }
 
+// Transform: a - b = ~(~a + b)
+bool transform_sub(gimple_stmt_iterator* gsi, gimple* stmt) {
+    tree lhs = gimple_assign_lhs(stmt);
+    tree op1 = gimple_assign_rhs1(stmt);
+    tree op2 = gimple_assign_rhs2(stmt);
+    tree type = TREE_TYPE(lhs);
+
+    if (!INTEGRAL_TYPE_P(type)) return false;
+    if (!decide(global_probability)) return false;
+
+    location_t loc = gimple_location(stmt);
+
+    // Build constant -1 for NOT operation
+    tree minus_one = build_int_cst(type, -1);
+
+    tree temp_not_a = make_ssa_name(type);
+    tree temp_add = make_ssa_name(type);
+
+    // ~a
+    gimple* g1 = gimple_build_assign(temp_not_a, BIT_XOR_EXPR, op1, minus_one);
+    gimple_set_location(g1, loc);
+
+    // ~a + b
+    gimple* g2 = gimple_build_assign(temp_add, PLUS_EXPR, temp_not_a, op2);
+    gimple_set_location(g2, loc);
+
+    // ~(~a + b) = lhs
+    gimple* g3 = gimple_build_assign(lhs, BIT_XOR_EXPR, temp_add, minus_one);
+    gimple_set_location(g3, loc);
+
+    gsi_insert_before(gsi, g1, GSI_SAME_STMT);
+    gsi_insert_before(gsi, g2, GSI_SAME_STMT);
+    gsi_insert_before(gsi, g3, GSI_SAME_STMT);
+    gsi_remove(gsi, true);
+
+    transforms_applied++;
+    return true;
+}
+
 // Transform a statement
 bool transform_statement(gimple_stmt_iterator* gsi) {
     gimple* stmt = gsi_stmt(*gsi);
@@ -220,6 +259,7 @@ bool transform_statement(gimple_stmt_iterator* gsi) {
     enum tree_code code = gimple_assign_rhs_code(stmt);
     switch (code) {
         case PLUS_EXPR:    return transform_add(gsi, stmt);
+        case MINUS_EXPR:   return transform_sub(gsi, stmt);
         case BIT_XOR_EXPR: return transform_xor(gsi, stmt);
         case BIT_AND_EXPR: return transform_and(gsi, stmt);
         case BIT_IOR_EXPR: return transform_or(gsi, stmt);

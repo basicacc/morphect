@@ -513,7 +513,7 @@ public:
      */
     static std::pair<std::string, std::vector<std::string>>
     generateAlwaysFalse(const std::string& prefix) {
-        int choice = GlobalRandom::nextInt(0, 4);
+        int choice = GlobalRandom::nextInt(0, 3);  // 4 cases: 0, 1, 2, 3
         std::vector<std::string> setup;
         std::string condition;
 
@@ -569,7 +569,7 @@ public:
      */
     static std::pair<std::string, std::vector<std::string>>
     generateAlwaysTrue(const std::string& prefix) {
-        int choice = GlobalRandom::nextInt(0, 4);
+        int choice = GlobalRandom::nextInt(0, 3);  // 4 cases: 0, 1, 2, 3
         std::vector<std::string> setup;
         std::string condition;
 

@@ -1,0 +1,129 @@
+{
+  "obfuscation_settings": {
+    "global_probability": 1.0,
+    "preserve_functionality": true
+  },
+  "ir_transformations": {
+    "mba_transformations": {
+      "{result} = add {type} {a}, {b}": {
+        "description": "a + b = (a ^ b) + 2 * (a & b)",
+        "replacements": [
+          [
+            "%{temp1} = xor {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "%{temp3} = shl {type} %{temp2}, 1",
+            "{result} = add {type} %{temp1}, %{temp3}"
+          ],
+          [
+            "%{temp1} = or {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "{result} = add {type} %{temp1}, %{temp2}"
+          ],
+          [
+            "%{temp1} = or {type} {a}, {b}",
+            "%{temp2} = shl {type} %{temp1}, 1",
+            "%{temp3} = xor {type} {a}, {b}",
+            "{result} = sub {type} %{temp2}, %{temp3}"
+          ]
+        ],
+        "probabilities": [0.4, 0.3, 0.3]
+      },
+      "{result} = sub {type} {a}, {b}": {
+        "description": "a - b = (a ^ b) - 2 * (~a & b)",
+        "replacements": [
+          [
+            "%{temp1} = xor {type} {a}, {b}",
+            "%{temp2} = xor {type} {a}, -1",
+            "%{temp3} = and {type} %{temp2}, {b}",
+            "%{temp4} = shl {type} %{temp3}, 1",
+            "{result} = sub {type} %{temp1}, %{temp4}"
+          ],
+          [
+            "%{temp1} = xor {type} {b}, -1",
+            "%{temp2} = add {type} %{temp1}, 1",
+            "{result} = add {type} {a}, %{temp2}"
+          ],
+          [
+            "%{temp1} = xor {type} {a}, -1",
+            "%{temp2} = add {type} %{temp1}, {b}",
+            "{result} = xor {type} %{temp2}, -1"
+          ]
+        ],
+        "probabilities": [0.4, 0.3, 0.3]
+      },
+      "{result} = xor {type} {a}, {b}": {
+        "description": "a ^ b = (a | b) - (a & b)",
+        "replacements": [
+          [
+            "%{temp1} = or {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "{result} = sub {type} %{temp1}, %{temp2}"
+          ],
+          [
+            "%{temp1} = add {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "%{temp3} = shl {type} %{temp2}, 1",
+            "{result} = sub {type} %{temp1}, %{temp3}"
+          ],
+          [
+            "%{temp1} = or {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "%{temp3} = xor {type} %{temp2}, -1",
+            "{result} = and {type} %{temp1}, %{temp3}"
+          ]
+        ],
+        "probabilities": [0.4, 0.3, 0.3]
+      },
+      "{result} = and {type} {a}, {b}": {
+        "description": "a & b = (a | b) - (a ^ b)",
+        "replacements": [
+          [
+            "%{temp1} = or {type} {a}, {b}",
+            "%{temp2} = xor {type} {a}, {b}",
+            "{result} = sub {type} %{temp1}, %{temp2}"
+          ],
+          [
+            "%{temp1} = xor {type} {a}, -1",
+            "%{temp2} = xor {type} {b}, -1",
+            "%{temp3} = or {type} %{temp1}, %{temp2}",
+            "{result} = xor {type} %{temp3}, -1"
+          ]
+        ],
+        "probabilities": [0.6, 0.4]
+      },
+      "{result} = or {type} {a}, {b}": {
+        "description": "a | b = (a ^ b) + (a & b)",
+        "replacements": [
+          [
+            "%{temp1} = xor {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "{result} = add {type} %{temp1}, %{temp2}"
+          ],
+          [
+            "%{temp1} = add {type} {a}, {b}",
+            "%{temp2} = and {type} {a}, {b}",
+            "{result} = sub {type} %{temp1}, %{temp2}"
+          ],
+          [
+            "%{temp1} = xor {type} {a}, -1",
+            "%{temp2} = xor {type} {b}, -1",
+            "%{temp3} = and {type} %{temp1}, %{temp2}",
+            "{result} = xor {type} %{temp3}, -1"
+          ]
+        ],
+        "probabilities": [0.4, 0.3, 0.3]
+      }
+    }
+  },
+  "control_flow": {
+    "cff_enabled": false,
+    "bogus_cf_enabled": false
+  },
+  "data_obfuscation": {
+    "variable_splitting": false,
+    "string_encoding": false
+  },
+  "dead_code": {
+    "enabled": false
+  }
+}
