@@ -673,15 +673,16 @@ std::vector<std::string> LLVMVariableSplittingPass::generateSplitAssignment(
             // part1 = value * inv, part2 = factor
 
             // Pick a random odd number as the factor (must be odd to have inverse mod 2^32)
-            int64_t factor = GlobalRandom::nextInt(3, 1000) | 1;  // Ensure odd
+            uint64_t factor = static_cast<uint64_t>(GlobalRandom::nextInt(3, 1000)) | 1u;  // Ensure odd
 
             // Extended GCD to find modular inverse of factor mod 2^32
             // For odd numbers, inverse always exists mod 2^32
             // Using the formula: inv = factor * (2 - factor * factor) iteratively
-            int64_t inv = factor;
+            // Use uint64_t to avoid signed overflow UB
+            uint64_t inv = factor;
             for (int i = 0; i < 5; i++) {  // 5 iterations is enough for 32-bit
-                inv = inv * (2 - factor * inv);
-                inv &= 0xFFFFFFFF;  // Keep in 32-bit range
+                uint64_t product = (factor * inv) & 0xFFFFFFFFu;
+                inv = (inv * (2u - product)) & 0xFFFFFFFFu;  // Keep in 32-bit range
             }
 
             // part1 = value * inverse (we compute this at runtime)
@@ -689,7 +690,7 @@ std::vector<std::string> LLVMVariableSplittingPass::generateSplitAssignment(
             std::string inv_temp = "%split_inv_" + std::to_string(split_counter_++);
             result.push_back(indent + inv_temp + " = add " + type + " 0, " + std::to_string(static_cast<int32_t>(inv)));
             result.push_back(indent + split_var.part1_name + " = mul " + type + " " + value + ", " + inv_temp);
-            result.push_back(indent + split_var.part2_name + " = add " + type + " 0, " + std::to_string(factor));
+            result.push_back(indent + split_var.part2_name + " = add " + type + " 0, " + std::to_string(static_cast<int64_t>(factor)));
             break;
         }
 

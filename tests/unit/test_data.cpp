@@ -411,14 +411,17 @@ TEST_F(EnhancedConstantObfTest, NestedXORStrategy_Reconstructs) {
 
 TEST_F(EnhancedConstantObfTest, ShiftAddStrategy_Reconstructs) {
     // c = (base << shift) + remainder
+    // Note: Left-shifting negative numbers is UB in C++, so we cast to unsigned
     for (int64_t c = MIN_VAL; c <= MAX_VAL; c += 137) {
         int shift = 4;  // Use shift of 4 bits (multiply by 16)
         int64_t divisor = 1LL << shift;
 
         int64_t base = c / divisor;
-        int64_t remainder = c - (base << shift);
+        // Use unsigned shift to avoid UB, then cast back
+        int64_t shifted = static_cast<int64_t>(static_cast<uint64_t>(base) << shift);
+        int64_t remainder = c - shifted;
 
-        int64_t reconstructed = (base << shift) + remainder;
+        int64_t reconstructed = shifted + remainder;
         EXPECT_EQ(reconstructed, c) << "ShiftAdd failed for c=" << c;
     }
 }
@@ -442,11 +445,13 @@ TEST_F(EnhancedConstantObfTest, LargeConstants_Handled) {
         EXPECT_EQ(mba_result, c) << "Large constant MBA failed for c=" << c;
 
         // Test shift-add with large values
+        // Use unsigned shift to avoid UB with negative numbers
         int shift = 8;
         int64_t divisor = 1LL << shift;
         int64_t base = c / divisor;
-        int64_t remainder = c - (base << shift);
-        int64_t shift_result = (base << shift) + remainder;
+        int64_t shifted = static_cast<int64_t>(static_cast<uint64_t>(base) << shift);
+        int64_t remainder = c - shifted;
+        int64_t shift_result = shifted + remainder;
         EXPECT_EQ(shift_result, c) << "Large constant ShiftAdd failed for c=" << c;
     }
 }
