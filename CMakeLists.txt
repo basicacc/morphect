@@ -329,6 +329,7 @@ if(MORPHECT_BUILD_TESTS)
                 tests/unit/test_main.cpp
                 tests/integration/test_gimple.cpp
                 tests/integration/test_ir.cpp
+                tests/integration/test_obfuscation_verification.cpp
             )
 
             target_include_directories(morphect_integration_test PRIVATE
@@ -338,6 +339,8 @@ if(MORPHECT_BUILD_TESTS)
             target_link_libraries(morphect_integration_test PRIVATE
                 morphect_core
                 morphect_mba
+                morphect_cff
+                morphect_deadcode
                 gtest
                 gtest_main
             )

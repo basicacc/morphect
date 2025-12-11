@@ -271,18 +271,30 @@ class LLVMIRFixture : public ObfuscationFixture {
 protected:
     /**
      * Apply IR obfuscation to a string and return result
+     *
+     * If no config is provided, --mba is added by default.
+     * If config is provided, it controls the transformation behavior.
+     * extra_args can override this (e.g., "" to disable default --mba)
      */
     std::string obfuscateIR(const std::string& ir_content,
-                            const std::string& config = "") {
+                            const std::string& config = "",
+                            const std::string& extra_args = "") {
         auto input_file = writeSource("input.ll", ir_content);
         auto output_file = test_dir_ / "output.ll";
 
-        std::string cmd = ir_obf_path_.string() + " " + input_file.string() +
-                          " -o " + output_file.string();
+        // morphect-ir uses positional args: input.ll output.ll
+        std::string cmd = ir_obf_path_.string();
         if (!config.empty()) {
             auto config_file = writeSource("config.json", config);
             cmd += " --config " + config_file.string();
+        } else if (extra_args.empty()) {
+            // No config and no extra args: use default --mba
+            cmd += " --mba";
         }
+        if (!extra_args.empty()) {
+            cmd += " " + extra_args;
+        }
+        cmd += " " + input_file.string() + " " + output_file.string();
 
         auto result = runCommand(cmd);
         if (!result.success()) {
