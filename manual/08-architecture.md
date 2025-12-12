@@ -543,4 +543,4 @@ struct MorphectConfig {
 
 ---
 
-*Previous: [Configuration Reference](06-configuration.md) | Next: [API Reference](08-api.md)*
+*Previous: [Configuration Reference](07-configuration.md) | Next: [API Reference](09-api.md)*

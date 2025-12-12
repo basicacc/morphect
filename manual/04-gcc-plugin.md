@@ -330,4 +330,4 @@ If compilation is slow with the plugin:
 
 ---
 
-*Previous: [LLVM IR Obfuscator](03-llvm-ir.md) | Next: [Obfuscation Techniques](05-techniques.md)*
+*Previous: [LLVM IR Obfuscator](03-llvm-ir.md) | Next: [Assembly Obfuscator](05-assembly.md)*

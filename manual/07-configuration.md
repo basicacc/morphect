@@ -484,4 +484,4 @@ Protect only specific functions:
 
 ---
 
-*Previous: [Obfuscation Techniques](05-techniques.md) | Next: [Architecture](07-architecture.md)*
+*Previous: [Obfuscation Techniques](06-techniques.md) | Next: [Architecture](08-architecture.md)*

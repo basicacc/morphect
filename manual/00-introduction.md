@@ -102,11 +102,12 @@ This manual is organized into the following sections:
 | [Quick Start Guide](02-quickstart.md) | Basic usage examples |
 | [LLVM IR Obfuscator](03-llvm-ir.md) | The morphect-ir tool reference |
 | [GCC Plugin](04-gcc-plugin.md) | GIMPLE-based obfuscation |
-| [Obfuscation Techniques](05-techniques.md) | Detailed explanation of transformations |
-| [Configuration Reference](06-configuration.md) | JSON configuration options |
-| [Architecture](07-architecture.md) | Internal design and extension |
-| [API Reference](08-api.md) | Programmatic interface |
-| [Troubleshooting](09-troubleshooting.md) | Common issues and solutions |
+| [Assembly Obfuscator](05-assembly.md) | Post-compilation assembly obfuscation |
+| [Obfuscation Techniques](06-techniques.md) | Detailed explanation of transformations |
+| [Configuration Reference](07-configuration.md) | JSON configuration options |
+| [Architecture](08-architecture.md) | Internal design and extension |
+| [API Reference](09-api.md) | Programmatic interface |
+| [Troubleshooting](10-troubleshooting.md) | Common issues and solutions |
 
 ---
 

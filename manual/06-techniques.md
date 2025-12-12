@@ -529,4 +529,4 @@ Disassemblers may analyze the fake path.
 
 ---
 
-*Previous: [GCC Plugin](04-gcc-plugin.md) | Next: [Configuration Reference](06-configuration.md)*
+*Previous: [Assembly Obfuscator](05-assembly.md) | Next: [Configuration Reference](07-configuration.md)*

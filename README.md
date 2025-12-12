@@ -60,9 +60,24 @@ clang obfuscated.ll -o program
 gcc -fplugin=./build/lib/morphect_plugin.so source.c -o program
 ```
 
+### Assembly Obfuscator
+
+```bash
+# Generate Intel-syntax assembly
+gcc -S -masm=intel source.c -o source.s
+
+# Obfuscate
+./build/bin/morphect-asm --probability 0.8 source.s obfuscated.s
+
+# Assemble and link
+gcc obfuscated.s -o program
+```
+
 ---
 
 ## Command Line Options
+
+### morphect-ir (LLVM IR)
 
 ```
 morphect-ir [options] <input.ll> <output.ll>
@@ -75,6 +90,24 @@ Passes:
   --strenc      String Encoding
   --deadcode    Dead Code Insertion
   --all         Enable all passes
+
+Settings:
+  --config      JSON configuration file
+  --probability Transformation probability (0.0-1.0)
+  --verbose     Detailed output
+```
+
+### morphect-asm (Assembly)
+
+```
+morphect-asm [options] <input.s> <output.s>
+
+Features:
+  - Control flow obfuscation (opaque predicates, bogus branches)
+  - MBA (Mixed Boolean-Arithmetic) transformations
+  - Constant obfuscation
+  - Dead code insertion
+  - Label randomization
 
 Settings:
   --config      JSON configuration file
@@ -157,11 +190,12 @@ Complete documentation is available in the manual:
 | [Quick Start](manual/02-quickstart.md) | Basic usage examples |
 | [LLVM IR Tool](manual/03-llvm-ir.md) | morphect-ir reference |
 | [GCC Plugin](manual/04-gcc-plugin.md) | Plugin usage and integration |
-| [Techniques](manual/05-techniques.md) | How obfuscation methods work |
-| [Configuration](manual/06-configuration.md) | Complete configuration reference |
-| [Architecture](manual/07-architecture.md) | Internal design and extension |
-| [API Reference](manual/08-api.md) | Programmatic interface |
-| [Troubleshooting](manual/09-troubleshooting.md) | Common issues and solutions |
+| [Assembly Obfuscator](manual/05-assembly.md) | morphect-asm reference |
+| [Techniques](manual/06-techniques.md) | How obfuscation methods work |
+| [Configuration](manual/07-configuration.md) | Complete configuration reference |
+| [Architecture](manual/08-architecture.md) | Internal design and extension |
+| [API Reference](manual/09-api.md) | Programmatic interface |
+| [Troubleshooting](manual/10-troubleshooting.md) | Common issues and solutions |
 
 ---
 
