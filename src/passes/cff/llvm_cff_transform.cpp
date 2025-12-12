@@ -345,6 +345,60 @@ std::vector<std::string> LLVMCFFTransformation::generateStateUpdate(
                         ", i32 " + std::to_string(false_state));
         output.push_back("  store i32 " + tmp + ", i32* %" + config.state_var_name);
     }
+    else if (block.has_switch) {
+        // Switch statement - convert to nested selects or a series of comparisons
+        // The switch condition was stored in block.switch_condition
+        // Each case has (value, target_block_id)
+
+        if (block.switch_cases.empty()) {
+            // Only default case
+            int default_state = block.switch_default >= 0 && states.find(block.switch_default) != states.end()
+                               ? states.at(block.switch_default) : end_state;
+            output.push_back("  store i32 " + std::to_string(default_state) +
+                            ", i32* %" + config.state_var_name + "  ; switch default");
+        }
+        else {
+            // Build a chain of selects: check each case value
+            int default_state = block.switch_default >= 0 && states.find(block.switch_default) != states.end()
+                               ? states.at(block.switch_default) : end_state;
+
+            // Start with default state
+            std::string current_result = std::to_string(default_state);
+            bool is_constant = true;
+
+            // Process cases in reverse order (so first case has highest priority)
+            for (auto it = block.switch_cases.rbegin(); it != block.switch_cases.rend(); ++it) {
+                int case_val = it->first;
+                int target_id = it->second;
+
+                if (states.find(target_id) == states.end()) continue;
+                int target_state = states.at(target_id);
+
+                // Generate: cmp = icmp eq condition, case_val
+                //           result = select cmp, target_state, previous_result
+                std::string cmp_tmp = nextTemp();
+                output.push_back("  " + cmp_tmp + " = icmp eq i32 " + block.switch_condition +
+                                ", " + std::to_string(case_val));
+
+                std::string select_tmp = nextTemp();
+                if (is_constant) {
+                    output.push_back("  " + select_tmp + " = select i1 " + cmp_tmp +
+                                    ", i32 " + std::to_string(target_state) +
+                                    ", i32 " + current_result);
+                } else {
+                    output.push_back("  " + select_tmp + " = select i1 " + cmp_tmp +
+                                    ", i32 " + std::to_string(target_state) +
+                                    ", i32 " + current_result);
+                }
+                current_result = select_tmp;
+                is_constant = false;
+            }
+
+            // Store the final computed state
+            output.push_back("  store i32 " + current_result +
+                            ", i32* %" + config.state_var_name + "  ; switch result");
+        }
+    }
     else if (!block.successors.empty()) {
         // Unconditional branch
         int next_state = states.at(block.successors[0]);

@@ -101,9 +101,52 @@ std::optional<CFGInfo> LLVMCFGAnalyzer::analyze(const std::vector<std::string>& 
             parseTerminator(current_block, trimmed);
         }
         else if (trimmed.find("switch ") == 0) {
-            current_block.terminator = trimmed;
+            // Switch can span multiple lines - collect all of it
+            std::string switch_terminator = trimmed;
+            // Check if switch continues on next lines (look for closing ])
+            while (switch_terminator.find(']') == std::string::npos && i + 1 < lines.size()) {
+                i++;
+                std::string next_line = lines[i];
+                size_t next_start = next_line.find_first_not_of(" \t");
+                if (next_start != std::string::npos) {
+                    switch_terminator += "\n" + next_line.substr(next_start);
+                }
+            }
+            current_block.terminator = switch_terminator;
             current_block.has_switch = true;
-            // Complex parsing for switch - simplified here
+
+            // Parse switch: switch i32 %val, label %default [ i32 0, label %case0 ... ]
+            // Extract the switch condition variable
+            std::regex switch_cond_pattern(R"(switch\s+\w+\s+(%[\w.]+))");
+            std::smatch cond_match;
+            if (std::regex_search(switch_terminator, cond_match, switch_cond_pattern)) {
+                current_block.switch_condition = cond_match[1].str();
+            }
+
+            // Extract default and all case targets
+            std::regex default_pattern(R"(switch\s+\w+\s+[^,]+,\s*label\s+%([\w.]+))");
+            std::smatch match;
+            if (std::regex_search(switch_terminator, match, default_pattern)) {
+                std::string default_label = match[1].str();
+                if (label_to_id.find(default_label) == label_to_id.end()) {
+                    label_to_id[default_label] = next_id++;
+                }
+                current_block.switch_default = label_to_id[default_label];
+            }
+
+            // Extract all case labels
+            std::regex case_pattern(R"(i32\s+(-?\d+),\s*label\s+%([\w.]+))");
+            auto case_begin = std::sregex_iterator(switch_terminator.begin(), switch_terminator.end(), case_pattern);
+            auto case_end = std::sregex_iterator();
+            for (std::sregex_iterator it = case_begin; it != case_end; ++it) {
+                std::smatch case_match = *it;
+                int case_val = std::stoi(case_match[1].str());
+                std::string case_label = case_match[2].str();
+                if (label_to_id.find(case_label) == label_to_id.end()) {
+                    label_to_id[case_label] = next_id++;
+                }
+                current_block.switch_cases.push_back({case_val, label_to_id[case_label]});
+            }
         }
         else if (trimmed.find("unreachable") == 0) {
             current_block.terminator = trimmed;
@@ -204,6 +247,18 @@ std::optional<CFGInfo> LLVMCFGAnalyzer::analyze(const std::vector<std::string>& 
                     int target_id = label_to_id[target_label];
                     block.successors.push_back(target_id);
                     block.true_target = target_id;
+                }
+            }
+        }
+        else if (block.has_switch) {
+            // Switch: add default and all case targets as successors
+            if (block.switch_default >= 0) {
+                block.successors.push_back(block.switch_default);
+            }
+            for (const auto& [case_val, target_id] : block.switch_cases) {
+                // Avoid duplicates
+                if (std::find(block.successors.begin(), block.successors.end(), target_id) == block.successors.end()) {
+                    block.successors.push_back(target_id);
                 }
             }
         }

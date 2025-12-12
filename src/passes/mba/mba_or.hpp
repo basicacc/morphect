@@ -57,12 +57,14 @@ public:
 
     std::vector<MBAVariant> getVariants() const override {
         return {
-            MBAVariant("xor_and", "(a ^ b) + (a & b)", 0.2),
-            MBAVariant("add_and", "(a + b) - (a & b)", 0.2),
-            MBAVariant("de_morgan", "~(~a & ~b)", 0.2),
-            MBAVariant("sum_diff_a", "a + (b & ~a)", 0.13),
-            MBAVariant("sum_diff_b", "b + (a & ~b)", 0.13),
-            MBAVariant("and_xor", "(a & b) | (a ^ b)", 0.14)
+            MBAVariant("xor_and", "(a ^ b) + (a & b)", 0.12),
+            MBAVariant("add_and", "(a + b) - (a & b)", 0.12),
+            MBAVariant("de_morgan", "~(~a & ~b)", 0.14),
+            MBAVariant("sum_diff_a", "a + (b & ~a)", 0.12),
+            MBAVariant("sum_diff_b", "b + (a & ~b)", 0.12),
+            MBAVariant("xor_diff", "a ^ (b & ~a)", 0.12),
+            MBAVariant("nested_xor", "((a ^ b) & b) + a", 0.12),
+            MBAVariant("complex", "(~a ^ b) ^ (~a & b)", 0.14)
         };
     }
 

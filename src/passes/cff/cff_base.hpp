@@ -58,6 +58,11 @@ struct BasicBlockInfo {
     std::string condition;           // Condition for conditional branch
     int true_target = -1;            // Target if condition true
     int false_target = -1;           // Target if condition false
+
+    // Switch statement info
+    int switch_default = -1;                                    // Default case target
+    std::string switch_condition;                               // Switch condition variable
+    std::vector<std::pair<int, int>> switch_cases;              // (value, target_block_id) pairs
 };
 
 /**

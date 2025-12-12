@@ -37,26 +37,44 @@
 #include <string>
 #include <regex>
 #include <map>
+#include <set>
 #include <algorithm>
+#include <iomanip>
 
 using namespace morphect;
 
+// Global verbose flag for detailed output
+static bool g_verbose = false;
+
 /**
- * LLVM IR Transformation Rule
+ * Transformation record for detailed logging
  */
-struct IRRule {
-    std::string pattern;
-    std::vector<std::vector<std::string>> replacements;
-    std::vector<double> probabilities;
-    std::string description;
+struct TransformationRecord {
+    std::string function_name;
+    std::string pass_name;
+    std::string operation;
+    std::string original;
+    std::string transformed;
+    int line_number;
 };
 
 /**
- * LLVM IR Obfuscator class
+ * Function info extracted from IR
+ */
+struct FunctionInfo {
+    std::string name;
+    int start_line;
+    int end_line;
+    int instruction_count;
+    std::vector<std::string> basic_blocks;
+};
+
+/**
+ * LLVM IR Obfuscator class with detailed logging
  */
 class LLVMIRObfuscator {
 public:
-    LLVMIRObfuscator() : logger_("IRObfuscator") {}
+    LLVMIRObfuscator() : logger_("morphect") {}
 
     bool loadConfig(const std::string& config_file) {
         try {
@@ -69,83 +87,8 @@ public:
         }
     }
 
-    void setGlobalProbability(double prob) {
-        global_probability_ = prob;
-    }
-
-    std::string obfuscate(const std::string& ir_code) {
-        std::istringstream input(ir_code);
-        std::vector<std::string> result;
-        std::string line;
-        int line_count = 0;
-
-        while (std::getline(input, line)) {
-            line_count++;
-            std::string trimmed = trim(line);
-
-            // Skip metadata, declarations, etc.
-            if (shouldSkipLine(trimmed)) {
-                result.push_back(line);
-                continue;
-            }
-
-            // Try to apply transformations
-            bool transformed = false;
-
-            for (const auto& [name, rule] : rules_) {
-                std::map<std::string, std::string> vars;
-
-                if (matchPattern(trimmed, rule.pattern, vars)) {
-                    // Check probability
-                    if (!GlobalRandom::decide(global_probability_)) {
-                        continue;
-                    }
-
-                    auto replacement = applyRule(rule, vars, line);
-                    if (!replacement.empty()) {
-                        std::string indent = getIndent(line);
-
-                        for (const auto& repl_line : replacement) {
-                            result.push_back(indent + repl_line);
-                        }
-
-                        transformed = true;
-                        stats_.increment(name + "_applied");
-                        logger_.debug("Applied {} at line {}", name, line_count);
-                        break;
-                    }
-                }
-            }
-
-            if (!transformed) {
-                result.push_back(line);
-            }
-        }
-
-        // Build output
-        std::ostringstream output;
-        for (size_t i = 0; i < result.size(); i++) {
-            output << result[i];
-            if (i < result.size() - 1) output << "\n";
-        }
-        output << "\n";
-
-        return output.str();
-    }
-
-    void printStatistics() {
-        logger_.info("");
-        logger_.info("=== LLVM IR Obfuscation Statistics ===");
-
-        int total = 0;
-        for (const auto& [name, count] : stats_.getIntStats()) {
-            logger_.info("  {}: {}", name, count);
-            total += count;
-        }
-
-        logger_.info("Total transformations: {}", total);
-        logger_.info("======================================");
-    }
+    void setVerbose(bool v) { verbose_ = v; g_verbose = v; }
+    void setGlobalProbability(double prob) { global_probability_ = prob; }
 
     // Enable/disable individual passes
     void setEnableMBA(bool enable) { enable_mba_ = enable; }
@@ -156,48 +99,102 @@ public:
     void setEnableDeadCode(bool enable) { enable_dead_code_ = enable; }
 
     /**
-     * Full obfuscation pipeline with all enabled passes
+     * Full obfuscation pipeline with detailed logging
      */
     std::string obfuscateFull(const std::string& ir_code) {
-        std::string result = ir_code;
+        transformations_.clear();
+        pass_stats_.clear();
 
-        // Convert to line vector for pass-based transformations
-        std::vector<std::string> lines = splitLines(result);
+        // Parse functions from IR
+        std::vector<std::string> lines = splitLines(ir_code);
+        std::vector<FunctionInfo> functions = parseFunctions(lines);
 
-        // Step 1: Apply MBA transformations (using LLVMMBAPass)
+        if (verbose_) {
+            logHeader("IR Analysis");
+            fprintf(stderr, "[morphect] Found %zu functions in input\n", functions.size());
+            for (const auto& func : functions) {
+                fprintf(stderr, "[morphect]   - %s (%d instructions, %zu basic blocks)\n",
+                        func.name.c_str(), func.instruction_count, func.basic_blocks.size());
+            }
+            fprintf(stderr, "\n");
+        }
+
+        // Apply passes with detailed logging
         if (enable_mba_) {
-            lines = applyMBA(lines);
+            lines = applyMBAPass(lines, functions);
         }
 
-        // Step 2: Apply CFF (Control Flow Flattening)
         if (enable_cff_) {
-            lines = applyCFF(lines);
+            lines = applyCFFPass(lines, functions);
         }
 
-        // Step 3: Apply Bogus Control Flow
         if (enable_bogus_) {
-            lines = applyBogusControlFlow(lines);
+            lines = applyBogusPass(lines, functions);
         }
 
-        // Step 4: Apply Variable Splitting
         if (enable_var_split_) {
-            lines = applyVariableSplitting(lines);
+            lines = applyVariableSplitPass(lines, functions);
         }
 
-        // Step 5: Apply String Encoding
         if (enable_string_enc_) {
-            lines = applyStringEncoding(lines);
+            lines = applyStringEncodingPass(lines, functions);
         }
 
-        // Step 6: Apply Dead Code Insertion
         if (enable_dead_code_) {
-            lines = applyDeadCode(lines);
+            lines = applyDeadCodePass(lines, functions);
         }
 
         return joinLines(lines);
     }
 
+    /**
+     * Print detailed statistics like GIMPLE plugin
+     */
+    void printStatistics() {
+        fprintf(stderr, "\n");
+        logHeader("Transformation Summary");
+
+        int total = 0;
+
+        // Print per-pass statistics
+        for (const auto& [pass, count] : pass_stats_) {
+            fprintf(stderr, "[morphect] %s: %d transformations\n", pass.c_str(), count);
+            total += count;
+        }
+
+        fprintf(stderr, "[morphect] ─────────────────────────────────\n");
+        fprintf(stderr, "[morphect] Total transformations: %d\n", total);
+
+        // Print per-function breakdown if verbose
+        if (verbose_ && !transformations_.empty()) {
+            fprintf(stderr, "\n");
+            logHeader("Per-Function Details");
+
+            std::map<std::string, std::vector<TransformationRecord>> by_function;
+            for (const auto& t : transformations_) {
+                by_function[t.function_name].push_back(t);
+            }
+
+            for (const auto& [func, records] : by_function) {
+                fprintf(stderr, "[morphect] Function: %s\n", func.c_str());
+                std::map<std::string, int> pass_counts;
+                for (const auto& r : records) {
+                    pass_counts[r.pass_name]++;
+                }
+                for (const auto& [pass, count] : pass_counts) {
+                    fprintf(stderr, "[morphect]   %s: %d\n", pass.c_str(), count);
+                }
+            }
+        }
+
+        fprintf(stderr, "\n");
+    }
+
 private:
+    Logger logger_;
+    bool verbose_ = false;
+    double global_probability_ = 0.85;
+
     // Pass enable flags
     bool enable_mba_ = false;
     bool enable_cff_ = false;
@@ -206,38 +203,155 @@ private:
     bool enable_string_enc_ = false;
     bool enable_dead_code_ = false;
 
+    // Tracking
+    std::vector<TransformationRecord> transformations_;
+    std::map<std::string, int> pass_stats_;
+
+    void logHeader(const std::string& title) {
+        fprintf(stderr, "[morphect] ═══════════════════════════════════\n");
+        fprintf(stderr, "[morphect] %s\n", title.c_str());
+        fprintf(stderr, "[morphect] ═══════════════════════════════════\n");
+    }
+
+    void logPassStart(const std::string& pass_name) {
+        fprintf(stderr, "[morphect] ┌─ %s\n", pass_name.c_str());
+    }
+
+    void logPassEnd(const std::string& pass_name, int count) {
+        fprintf(stderr, "[morphect] └─ %s complete: %d transformations\n\n", pass_name.c_str(), count);
+    }
+
+    void logTransformation(const std::string& func, const std::string& pass,
+                          const std::string& op, const std::string& detail) {
+        if (verbose_) {
+            fprintf(stderr, "[morphect] │  [%s] %s: %s\n", func.c_str(), op.c_str(), detail.c_str());
+        }
+        pass_stats_[pass]++;
+    }
+
     /**
-     * Apply MBA (Mixed Boolean Arithmetic) pass
+     * Parse functions from LLVM IR
      */
-    std::vector<std::string> applyMBA(const std::vector<std::string>& lines) {
-        logger_.info("Applying MBA transformations...");
+    std::vector<FunctionInfo> parseFunctions(const std::vector<std::string>& lines) {
+        std::vector<FunctionInfo> functions;
+        std::regex define_re(R"(define\s+.*@([\w.]+)\s*\()");
+        std::regex bb_re(R"(^(\w+):)");
+
+        FunctionInfo* current = nullptr;
+        int instr_count = 0;
+
+        for (size_t i = 0; i < lines.size(); i++) {
+            const std::string& line = lines[i];
+            std::string trimmed = trim(line);
+
+            std::smatch match;
+            if (std::regex_search(line, match, define_re)) {
+                if (current) {
+                    current->end_line = static_cast<int>(i) - 1;
+                    current->instruction_count = instr_count;
+                }
+                functions.push_back(FunctionInfo{});
+                current = &functions.back();
+                current->name = match[1].str();
+                current->start_line = static_cast<int>(i);
+                instr_count = 0;
+            } else if (current) {
+                if (trimmed == "}") {
+                    current->end_line = static_cast<int>(i);
+                    current->instruction_count = instr_count;
+                    current = nullptr;
+                } else if (std::regex_match(trimmed, match, bb_re)) {
+                    current->basic_blocks.push_back(match[1].str());
+                } else if (!trimmed.empty() && trimmed[0] != ';' && trimmed[0] != '!') {
+                    // Count as instruction
+                    if (trimmed.find('=') != std::string::npos ||
+                        trimmed.find("ret ") == 0 ||
+                        trimmed.find("br ") == 0 ||
+                        trimmed.find("store ") == 0 ||
+                        trimmed.find("call ") == 0) {
+                        instr_count++;
+                    }
+                }
+            }
+        }
+
+        return functions;
+    }
+
+    /**
+     * Get function name at a given line
+     */
+    std::string getFunctionAt(const std::vector<FunctionInfo>& functions, int line) {
+        for (const auto& func : functions) {
+            if (line >= func.start_line && line <= func.end_line) {
+                return func.name;
+            }
+        }
+        return "<global>";
+    }
+
+    /**
+     * Apply MBA Pass with detailed logging
+     */
+    std::vector<std::string> applyMBAPass(const std::vector<std::string>& lines,
+                                           const std::vector<FunctionInfo>& functions) {
+        logPassStart("MBA (Mixed Boolean Arithmetic)");
+
+        // Log functions being processed
+        if (verbose_) {
+            for (const auto& func : functions) {
+                fprintf(stderr, "[morphect] │  Processing: %s\n", func.name.c_str());
+            }
+        }
 
         mba::LLVMMBAPass mba_pass;
         mba::MBAPassConfig mba_config;
         mba_config.global.enabled = true;
         mba_config.global.probability = global_probability_;
-        mba_config.global.nesting_depth = 1;  // Single pass - nesting causes correctness issues
+        mba_config.global.nesting_depth = 1;
         mba_pass.initializeMBA(mba_config);
 
         std::vector<std::string> result = lines;
+        int transformations = 0;
+
+        // Apply MBA to all lines at once
         auto transform_result = mba_pass.transformIR(result);
 
         if (transform_result == TransformResult::Success) {
-            auto mba_stats = mba_pass.getStatistics();
-            for (const auto& [key, val] : mba_stats) {
-                stats_.increment("mba_" + key, val);
+            auto stats = mba_pass.getStatistics();
+
+            // Log each type of transformation
+            for (const auto& [key, val] : stats) {
+                if (val > 0 && key.find("_applied") != std::string::npos) {
+                    std::string op = key.substr(0, key.find("_applied"));
+                    if (verbose_) {
+                        fprintf(stderr, "[morphect] │    %s: %d transformations\n", op.c_str(), val);
+                    }
+                    transformations += val;
+                    pass_stats_["MBA_" + op] = val;
+
+                    // Record for per-function summary
+                    TransformationRecord rec;
+                    rec.function_name = "<all>";
+                    rec.pass_name = "MBA";
+                    rec.operation = op;
+                    for (int i = 0; i < val; i++) {
+                        transformations_.push_back(rec);
+                    }
+                }
             }
-            logger_.info("MBA applied successfully");
         }
 
+        logPassEnd("MBA", transformations);
         return result;
     }
 
     /**
-     * Apply Control Flow Flattening pass
+     * Apply CFF Pass with detailed logging
      */
-    std::vector<std::string> applyCFF(const std::vector<std::string>& lines) {
-        logger_.info("Applying Control Flow Flattening...");
+    std::vector<std::string> applyCFFPass(const std::vector<std::string>& lines,
+                                           const std::vector<FunctionInfo>& functions) {
+        logPassStart("CFF (Control Flow Flattening)");
 
         cff::LLVMCFFPass cff_pass;
         cff::CFFConfig cff_config;
@@ -250,22 +364,28 @@ private:
         std::vector<std::string> result = lines;
         auto transform_result = cff_pass.transformIR(result);
 
+        int transformations = 0;
         if (transform_result == TransformResult::Success) {
-            auto cff_stats = cff_pass.getStatistics();
-            for (const auto& [key, val] : cff_stats) {
-                stats_.increment("cff_" + key, val);
+            auto stats = cff_pass.getStatistics();
+            for (const auto& [key, val] : stats) {
+                if (val > 0) {
+                    logTransformation("<multiple>", "CFF", key,
+                        std::to_string(val) + " " + key);
+                    transformations += val;
+                }
             }
-            logger_.info("CFF applied successfully");
         }
 
+        logPassEnd("CFF", transformations);
         return result;
     }
 
     /**
-     * Apply Bogus Control Flow pass
+     * Apply Bogus Control Flow Pass
      */
-    std::vector<std::string> applyBogusControlFlow(const std::vector<std::string>& lines) {
-        logger_.info("Applying Bogus Control Flow...");
+    std::vector<std::string> applyBogusPass(const std::vector<std::string>& lines,
+                                             const std::vector<FunctionInfo>& functions) {
+        logPassStart("Bogus Control Flow");
 
         cff::LLVMBogusPass bogus_pass;
         cff::BogusConfig bogus_config;
@@ -278,22 +398,28 @@ private:
         std::vector<std::string> result = lines;
         auto transform_result = bogus_pass.transformIR(result);
 
+        int transformations = 0;
         if (transform_result == TransformResult::Success) {
-            auto bogus_stats = bogus_pass.getStatistics();
-            for (const auto& [key, val] : bogus_stats) {
-                stats_.increment("bogus_" + key, val);
+            auto stats = bogus_pass.getStatistics();
+            for (const auto& [key, val] : stats) {
+                if (val > 0) {
+                    logTransformation("<multiple>", "Bogus", key,
+                        std::to_string(val) + " " + key);
+                    transformations += val;
+                }
             }
-            logger_.info("Bogus CF applied successfully");
         }
 
+        logPassEnd("Bogus CF", transformations);
         return result;
     }
 
     /**
-     * Apply Variable Splitting pass
+     * Apply Variable Splitting Pass
      */
-    std::vector<std::string> applyVariableSplitting(const std::vector<std::string>& lines) {
-        logger_.info("Applying Variable Splitting...");
+    std::vector<std::string> applyVariableSplitPass(const std::vector<std::string>& lines,
+                                                     const std::vector<FunctionInfo>& functions) {
+        logPassStart("Variable Splitting");
 
         data::LLVMVariableSplittingPass split_pass;
         data::VariableSplittingConfig split_config;
@@ -301,36 +427,36 @@ private:
         split_config.probability = global_probability_;
         split_config.split_phi_nodes = true;
         split_config.max_splits_per_function = 5;
-        // Exclude internal obfuscation variables from splitting
         split_config.exclude_patterns = {
-            "%_op_",      // Opaque predicate variables
-            "%_cff_",     // CFF state variables
-            "%_dead",     // Dead code variables
-            "%split_",    // Already split variables
-            "%reconst_",  // Reconstruction variables
-            "%_arith"     // Dead code arithmetic
+            "%_op_", "%_cff_", "%_dead", "%split_", "%reconst_", "%_arith", "%mba_"
         };
         split_pass.configure(split_config);
 
         std::vector<std::string> result = lines;
         auto transform_result = split_pass.transformIR(result);
 
+        int transformations = 0;
         if (transform_result == TransformResult::Success) {
-            auto split_stats = split_pass.getStatistics();
-            for (const auto& [key, val] : split_stats) {
-                stats_.increment("varsplit_" + key, val);
+            auto stats = split_pass.getStatistics();
+            for (const auto& [key, val] : stats) {
+                if (val > 0) {
+                    logTransformation("<multiple>", "VarSplit", key,
+                        std::to_string(val) + " " + key);
+                    transformations += val;
+                }
             }
-            logger_.info("Variable splitting applied successfully");
         }
 
+        logPassEnd("Variable Splitting", transformations);
         return result;
     }
 
     /**
-     * Apply String Encoding pass
+     * Apply String Encoding Pass
      */
-    std::vector<std::string> applyStringEncoding(const std::vector<std::string>& lines) {
-        logger_.info("Applying String Encoding...");
+    std::vector<std::string> applyStringEncodingPass(const std::vector<std::string>& lines,
+                                                      const std::vector<FunctionInfo>& functions) {
+        logPassStart("String Encoding");
 
         data::LLVMStringEncodingPass str_pass;
         data::StringEncodingConfig str_config;
@@ -342,22 +468,28 @@ private:
         std::vector<std::string> result = lines;
         auto transform_result = str_pass.transformIR(result);
 
+        int transformations = 0;
         if (transform_result == TransformResult::Success) {
-            auto str_stats = str_pass.getStatistics();
-            for (const auto& [key, val] : str_stats) {
-                stats_.increment("strenc_" + key, val);
+            auto stats = str_pass.getStatistics();
+            for (const auto& [key, val] : stats) {
+                if (val > 0) {
+                    logTransformation("<global>", "StrEnc", key,
+                        std::to_string(val) + " " + key);
+                    transformations += val;
+                }
             }
-            logger_.info("String encoding applied successfully");
         }
 
+        logPassEnd("String Encoding", transformations);
         return result;
     }
 
     /**
-     * Apply Dead Code Insertion pass
+     * Apply Dead Code Insertion Pass
      */
-    std::vector<std::string> applyDeadCode(const std::vector<std::string>& lines) {
-        logger_.info("Applying Dead Code Insertion...");
+    std::vector<std::string> applyDeadCodePass(const std::vector<std::string>& lines,
+                                                const std::vector<FunctionInfo>& functions) {
+        logPassStart("Dead Code Insertion");
 
         deadcode::LLVMDeadCodePass dead_pass;
         deadcode::DeadCodeConfig dead_config;
@@ -369,15 +501,34 @@ private:
         std::vector<std::string> result = lines;
         auto transform_result = dead_pass.transformIR(result);
 
+        int transformations = 0;
         if (transform_result == TransformResult::Success) {
-            auto dead_stats = dead_pass.getStatistics();
-            for (const auto& [key, val] : dead_stats) {
-                stats_.increment("deadcode_" + key, val);
+            auto stats = dead_pass.getStatistics();
+            for (const auto& [key, val] : stats) {
+                if (val > 0) {
+                    logTransformation("<multiple>", "DeadCode", key,
+                        std::to_string(val) + " " + key);
+                    transformations += val;
+                }
             }
-            logger_.info("Dead code insertion applied successfully");
         }
 
+        logPassEnd("Dead Code", transformations);
         return result;
+    }
+
+    /**
+     * Count specific operations in lines
+     */
+    int countOperations(const std::vector<std::string>& lines, const std::string& op) {
+        int count = 0;
+        std::regex pattern("=\\s*" + op + "\\s+");
+        for (const auto& line : lines) {
+            if (std::regex_search(line, pattern)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     std::vector<std::string> splitLines(const std::string& text) {
@@ -400,13 +551,6 @@ private:
         return result.str();
     }
 
-private:
-    Logger logger_;
-    Statistics stats_;
-    std::map<std::string, IRRule> rules_;
-    double global_probability_ = 0.85;
-    int temp_counter_ = 10000;
-
     std::string trim(const std::string& s) {
         size_t start = s.find_first_not_of(" \t");
         if (start == std::string::npos) return "";
@@ -414,259 +558,37 @@ private:
         return s.substr(start, end - start + 1);
     }
 
-    std::string getIndent(const std::string& line) {
-        size_t pos = line.find_first_not_of(" \t");
-        return pos != std::string::npos ? line.substr(0, pos) : "";
-    }
-
-    bool shouldSkipLine(const std::string& trimmed) {
-        if (trimmed.empty()) return true;
-        if (trimmed[0] == ';') return true;  // Comment
-        if (trimmed[0] == '!') return true;  // Metadata
-        if (trimmed.find("define") == 0) return true;
-        if (trimmed.find("declare") == 0) return true;
-        if (trimmed.find("attributes") == 0) return true;
-        if (trimmed.find("target") == 0) return true;
-        if (trimmed.find("source_filename") == 0) return true;
-        if (trimmed.find("ret ") == 0) return true;
-        if (trimmed.find("store ") == 0) return true;
-        if (trimmed.find("load ") == 0) return true;
-        if (trimmed.find("alloca ") == 0) return true;
-        if (trimmed.find("call ") == 0) return true;
-        if (trimmed.find("br ") == 0) return true;
-        if (trimmed.find("}") == 0) return true;
-        if (trimmed.find(":") != std::string::npos &&
-            trimmed.find("=") == std::string::npos) return true;  // Label
-
-        return false;
-    }
-
     void parseConfig(const JsonValue& json) {
-        // Get global probability
         if (json.has("global_probability")) {
             global_probability_ = json["global_probability"].asDouble(0.85);
         }
 
         const JsonValue& settings = json.has("obfuscation_settings")
-            ? json["obfuscation_settings"]
-            : json;
+            ? json["obfuscation_settings"] : json;
 
         if (settings.has("global_probability")) {
             global_probability_ = settings["global_probability"].asDouble(0.85);
         }
 
-        // Parse pass enable flags from control_flow section
         if (json.has("control_flow")) {
             const auto& cf = json["control_flow"];
-            if (cf.has("cff_enabled")) {
-                enable_cff_ = cf["cff_enabled"].asBool(false);
-            }
-            if (cf.has("bogus_cf_enabled")) {
-                enable_bogus_ = cf["bogus_cf_enabled"].asBool(false);
-            }
+            if (cf.has("cff_enabled")) enable_cff_ = cf["cff_enabled"].asBool(false);
+            if (cf.has("bogus_cf_enabled")) enable_bogus_ = cf["bogus_cf_enabled"].asBool(false);
         }
 
-        // Parse data obfuscation settings
         if (json.has("data_obfuscation")) {
             const auto& data = json["data_obfuscation"];
-            if (data.has("variable_splitting")) {
-                enable_var_split_ = data["variable_splitting"].asBool(false);
-            }
-            if (data.has("string_encoding")) {
-                enable_string_enc_ = data["string_encoding"].asBool(false);
-            }
+            if (data.has("variable_splitting")) enable_var_split_ = data["variable_splitting"].asBool(false);
+            if (data.has("string_encoding")) enable_string_enc_ = data["string_encoding"].asBool(false);
         }
 
-        // Parse dead code settings
         if (json.has("dead_code")) {
             const auto& dc = json["dead_code"];
-            if (dc.has("enabled")) {
-                enable_dead_code_ = dc["enabled"].asBool(false);
-            }
+            if (dc.has("enabled")) enable_dead_code_ = dc["enabled"].asBool(false);
         }
 
-        // Parse transformation rules
-        if (json.has("ir_transformations")) {
-            parseTransformations(json["ir_transformations"]);
-        }
-
-        logger_.info("Loaded {} transformation rules", rules_.size());
-        logger_.info("CFF: {}, Bogus: {}, VarSplit: {}, StrEnc: {}, DeadCode: {}",
-                     enable_cff_ ? "on" : "off",
-                     enable_bogus_ ? "on" : "off",
-                     enable_var_split_ ? "on" : "off",
-                     enable_string_enc_ ? "on" : "off",
-                     enable_dead_code_ ? "on" : "off");
-    }
-
-    void parseTransformations(const JsonValue& transforms) {
-        // Parse each category
-        std::vector<std::string> categories = {
-            "mba_transformations",
-            "comparison_ops",
-            "constant_ops",
-            "identity_ops"
-        };
-
-        for (const auto& cat : categories) {
-            if (transforms.has(cat)) {
-                parseCategory(transforms[cat], cat);
-            }
-        }
-    }
-
-    void parseCategory(const JsonValue& category, const std::string& cat_name) {
-        if (!category.isObject()) return;
-
-        for (const auto& [pattern, rule_json] : category.object_value) {
-            IRRule rule;
-            rule.pattern = pattern;
-
-            if (rule_json.has("description")) {
-                rule.description = rule_json["description"].asString();
-            }
-
-            if (rule_json.has("replacements") && rule_json["replacements"].isArray()) {
-                for (const auto& repl : rule_json["replacements"].array_value) {
-                    rule.replacements.push_back(repl.asStringArray());
-                }
-            }
-
-            if (rule_json.has("probabilities")) {
-                rule.probabilities = rule_json["probabilities"].asDoubleArray();
-            }
-
-            // Ensure probabilities match replacements
-            if (rule.probabilities.size() != rule.replacements.size()) {
-                double equal_prob = 1.0 / rule.replacements.size();
-                rule.probabilities.assign(rule.replacements.size(), equal_prob);
-            }
-
-            std::string rule_name = cat_name + "_" + std::to_string(rules_.size());
-            rules_[rule_name] = rule;
-        }
-    }
-
-    bool matchPattern(const std::string& line, const std::string& pattern,
-                     std::map<std::string, std::string>& vars) {
-        // Convert pattern to regex
-        std::string regex_str = patternToRegex(pattern);
-
-        try {
-            std::regex re(regex_str);
-            std::smatch match;
-
-            if (std::regex_search(line, match, re)) {
-                // Extract variables
-                extractVariables(pattern, match, vars);
-                return true;
-            }
-        } catch (const std::regex_error& e) {
-            logger_.error("Regex error: {}", e.what());
-        }
-
-        return false;
-    }
-
-    std::string patternToRegex(const std::string& pattern) {
-        std::string result = pattern;
-
-        // Escape special regex characters
-        std::vector<std::pair<std::string, std::string>> escapes = {
-            {"\\", "\\\\"}, {"^", "\\^"}, {"$", "\\$"},
-            {".", "\\."}, {"|", "\\|"}, {"?", "\\?"},
-            {"*", "\\*"}, {"+", "\\+"}, {"(", "\\("},
-            {")", "\\)"}, {"[", "\\["}, {"]", "\\]"}
-        };
-
-        for (const auto& [ch, escaped] : escapes) {
-            size_t pos = 0;
-            while ((pos = result.find(ch, pos)) != std::string::npos) {
-                result.replace(pos, ch.length(), escaped);
-                pos += escaped.length();
-            }
-        }
-
-        // Replace {var} with capture groups
-        std::regex var_re("\\\\\\{([^}]+)\\\\\\}");
-        result = std::regex_replace(result, var_re, "([a-zA-Z0-9_%.]+)");
-
-        // Replace spaces with flexible whitespace
-        size_t pos = 0;
-        while ((pos = result.find(" ", pos)) != std::string::npos) {
-            result.replace(pos, 1, "\\s+");
-            pos += 3;
-        }
-
-        return result;
-    }
-
-    void extractVariables(const std::string& pattern, const std::smatch& match,
-                         std::map<std::string, std::string>& vars) {
-        std::regex var_re("\\{([^}]+)\\}");
-        std::sregex_iterator iter(pattern.begin(), pattern.end(), var_re);
-        std::sregex_iterator end;
-
-        size_t i = 1;
-        for (; iter != end && i < match.size(); ++iter, ++i) {
-            vars[iter->str(1)] = match[i].str();
-        }
-    }
-
-    std::vector<std::string> applyRule(const IRRule& rule,
-                                        const std::map<std::string, std::string>& vars,
-                                        const std::string& /*original*/) {
-        if (rule.replacements.empty()) return {};
-
-        // Select replacement based on probability
-        size_t idx = GlobalRandom::get().chooseWeighted(
-            rule.replacements, rule.probabilities);
-
-        const auto& replacement = rule.replacements[idx];
-
-        // Substitute variables
-        std::map<std::string, std::string> temp_vars;
-        std::vector<std::string> result;
-
-        for (const auto& line : replacement) {
-            std::string substituted = line;
-
-            // Replace known variables
-            for (const auto& [name, value] : vars) {
-                std::string placeholder = "{" + name + "}";
-                size_t pos = 0;
-                while ((pos = substituted.find(placeholder, pos)) != std::string::npos) {
-                    substituted.replace(pos, placeholder.length(), value);
-                    pos += value.length();
-                }
-            }
-
-            // Replace temp variables
-            std::regex temp_re("\\{(temp[0-9]+)\\}");
-            std::smatch temp_match;
-            std::string scan = substituted;
-
-            while (std::regex_search(scan, temp_match, temp_re)) {
-                std::string temp_name = temp_match[1].str();
-                if (temp_vars.find(temp_name) == temp_vars.end()) {
-                    temp_vars[temp_name] = std::to_string(temp_counter_++);
-                }
-                scan = temp_match.suffix().str();
-            }
-
-            for (const auto& [name, value] : temp_vars) {
-                std::string placeholder = "{" + name + "}";
-                size_t pos = 0;
-                while ((pos = substituted.find(placeholder, pos)) != std::string::npos) {
-                    substituted.replace(pos, placeholder.length(), value);
-                    pos += value.length();
-                }
-            }
-
-            result.push_back(substituted);
-        }
-
-        return result;
+        logger_.info("Loaded configuration");
+        logger_.info("  Probability: {:.0f}%", global_probability_ * 100);
     }
 };
 
@@ -680,21 +602,27 @@ void printUsage(const char* program) {
     std::cout << "Options:" << std::endl;
     std::cout << "  --config <file>       Configuration file (JSON)" << std::endl;
     std::cout << "  --probability <n>     Global transformation probability (0.0-1.0)" << std::endl;
-    std::cout << "  --mba                 Enable MBA (Mixed Boolean Arithmetic) transformations" << std::endl;
+    std::cout << "  --mba                 Enable MBA (Mixed Boolean Arithmetic)" << std::endl;
     std::cout << "  --cff                 Enable Control Flow Flattening" << std::endl;
     std::cout << "  --bogus               Enable Bogus Control Flow" << std::endl;
     std::cout << "  --varsplit            Enable Variable Splitting" << std::endl;
     std::cout << "  --strenc              Enable String Encoding" << std::endl;
     std::cout << "  --deadcode            Enable Dead Code Insertion" << std::endl;
     std::cout << "  --all                 Enable all obfuscation passes" << std::endl;
-    std::cout << "  --verbose             Enable verbose output" << std::endl;
-    std::cout << "  --help                Show this help" << std::endl;
+    std::cout << "  --verbose, -v         Enable verbose output (show each transformation)" << std::endl;
+    std::cout << "  --help, -h            Show this help" << std::endl;
     std::cout << std::endl;
     std::cout << "Workflow:" << std::endl;
     std::cout << "  1. clang -S -emit-llvm -O0 source.c -o source.ll" << std::endl;
-    std::cout << "  2. " << program << " --all source.ll obfuscated.ll" << std::endl;
+    std::cout << "  2. " << program << " --mba --verbose source.ll obfuscated.ll" << std::endl;
     std::cout << "  3. llc obfuscated.ll -o obfuscated.s" << std::endl;
-    std::cout << "  4. gcc obfuscated.s -o output" << std::endl;
+    std::cout << "  4. clang obfuscated.s -o output" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Examples:" << std::endl;
+    std::cout << "  " << program << " --mba input.ll output.ll                # MBA only" << std::endl;
+    std::cout << "  " << program << " --mba --cff input.ll output.ll          # MBA + CFF" << std::endl;
+    std::cout << "  " << program << " --all --probability 0.5 in.ll out.ll    # All passes, 50%%" << std::endl;
+    std::cout << "  " << program << " -v --mba input.ll output.ll             # Verbose MBA" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -748,11 +676,23 @@ int main(int argc, char* argv[]) {
             } else if (output_file.empty()) {
                 output_file = arg;
             }
+        } else {
+            std::cerr << "Unknown option: " << arg << std::endl;
+            printUsage(argv[0]);
+            return 1;
         }
     }
 
     if (input_file.empty() || output_file.empty()) {
         printUsage(argv[0]);
+        return 1;
+    }
+
+    // Check if any pass is enabled
+    if (!enable_mba && !enable_cff && !enable_bogus &&
+        !enable_varsplit && !enable_strenc && !enable_deadcode) {
+        std::cerr << "Error: No obfuscation passes enabled." << std::endl;
+        std::cerr << "Use --mba, --cff, --bogus, --varsplit, --strenc, --deadcode, or --all" << std::endl;
         return 1;
     }
 
@@ -765,6 +705,7 @@ int main(int argc, char* argv[]) {
 
     // Create obfuscator
     LLVMIRObfuscator obfuscator;
+    obfuscator.setVerbose(verbose);
 
     // Load config
     if (!config_file.empty()) {
@@ -777,18 +718,36 @@ int main(int argc, char* argv[]) {
         obfuscator.setGlobalProbability(probability);
     }
 
-    // Apply command-line pass enables (override config)
-    if (enable_mba) obfuscator.setEnableMBA(true);
-    if (enable_cff) obfuscator.setEnableCFF(true);
-    if (enable_bogus) obfuscator.setEnableBogus(true);
-    if (enable_varsplit) obfuscator.setEnableVariableSplit(true);
-    if (enable_strenc) obfuscator.setEnableStringEncoding(true);
-    if (enable_deadcode) obfuscator.setEnableDeadCode(true);
+    // Apply command-line pass enables
+    obfuscator.setEnableMBA(enable_mba);
+    obfuscator.setEnableCFF(enable_cff);
+    obfuscator.setEnableBogus(enable_bogus);
+    obfuscator.setEnableVariableSplit(enable_varsplit);
+    obfuscator.setEnableStringEncoding(enable_strenc);
+    obfuscator.setEnableDeadCode(enable_deadcode);
+
+    // Print enabled passes
+    fprintf(stderr, "[morphect] Input: %s\n", input_file.c_str());
+    fprintf(stderr, "[morphect] Output: %s\n", output_file.c_str());
+    fprintf(stderr, "[morphect] Probability: %.0f%%\n", (probability >= 0 ? probability : 0.85) * 100);
+    fprintf(stderr, "[morphect] Passes: ");
+    std::vector<std::string> enabled_passes;
+    if (enable_mba) enabled_passes.push_back("MBA");
+    if (enable_cff) enabled_passes.push_back("CFF");
+    if (enable_bogus) enabled_passes.push_back("Bogus");
+    if (enable_varsplit) enabled_passes.push_back("VarSplit");
+    if (enable_strenc) enabled_passes.push_back("StrEnc");
+    if (enable_deadcode) enabled_passes.push_back("DeadCode");
+    for (size_t i = 0; i < enabled_passes.size(); i++) {
+        fprintf(stderr, "%s%s", enabled_passes[i].c_str(),
+                i < enabled_passes.size() - 1 ? ", " : "");
+    }
+    fprintf(stderr, "\n\n");
 
     // Read input
     std::ifstream input(input_file);
     if (!input.is_open()) {
-        LOG_ERROR("Cannot open input file: {}", input_file);
+        std::cerr << "[morphect] Error: Cannot open input file: " << input_file << std::endl;
         return 1;
     }
 
@@ -796,27 +755,28 @@ int main(int argc, char* argv[]) {
                         std::istreambuf_iterator<char>());
     input.close();
 
-    LOG_INFO("Read {} bytes from {}", ir_code.size(), input_file);
+    fprintf(stderr, "[morphect] Read %zu bytes from %s\n", ir_code.size(), input_file.c_str());
 
-    // Obfuscate using full pipeline (MBA + CFF + Bogus + VarSplit + StrEnc + DeadCode)
+    // Obfuscate
     std::string obfuscated = obfuscator.obfuscateFull(ir_code);
 
     // Write output
     std::ofstream output(output_file);
     if (!output.is_open()) {
-        LOG_ERROR("Cannot create output file: {}", output_file);
+        std::cerr << "[morphect] Error: Cannot create output file: " << output_file << std::endl;
         return 1;
     }
 
     output << obfuscated;
     output.close();
 
-    LOG_INFO("Wrote {} bytes to {}", obfuscated.size(), output_file);
+    fprintf(stderr, "[morphect] Wrote %zu bytes to %s\n", obfuscated.size(), output_file.c_str());
 
-    // Statistics
+    // Size statistics
     double increase = ((double)obfuscated.size() / ir_code.size() - 1.0) * 100.0;
-    LOG_INFO("Code size increase: {:.1f}%", increase);
+    fprintf(stderr, "[morphect] Size change: %+.1f%%\n", increase);
 
+    // Print transformation statistics
     obfuscator.printStatistics();
 
     return 0;

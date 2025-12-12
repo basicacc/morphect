@@ -330,6 +330,7 @@ if(MORPHECT_BUILD_TESTS)
                 tests/integration/test_gimple.cpp
                 tests/integration/test_ir.cpp
                 tests/integration/test_obfuscation_verification.cpp
+                tests/integration/test_semantics.cpp
             )
 
             target_include_directories(morphect_integration_test PRIVATE

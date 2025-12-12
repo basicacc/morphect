@@ -39,15 +39,8 @@ entry:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": true,
-            "probability": 1.0,
-            "operations": ["xor"]
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // Use --mba flag directly since config parser doesn't have mba key
+    auto obfuscated = obfuscateIR(ir, "", "--mba");
     ASSERT_FALSE(obfuscated.empty());
 
     // XOR should be replaced with OR/AND combination
@@ -71,14 +64,8 @@ entry:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": true,
-            "probability": 0.0
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // With --probability 0.0, MBA should not transform anything
+    auto obfuscated = obfuscateIR(ir, "", "--mba --probability 0.0");
     ASSERT_FALSE(obfuscated.empty());
 
     // With 0 probability, should not transform
@@ -95,16 +82,11 @@ entry:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": false
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // Without --mba, MBA is disabled - use empty extra_args to prevent default --mba
+    auto obfuscated = obfuscateIR(ir, "", "");
     ASSERT_FALSE(obfuscated.empty());
 
-    // Should be unchanged when disabled
+    // Should be unchanged when no passes enabled
     EXPECT_TRUE(irContains(obfuscated, "add i32") ||
                 irContains(obfuscated, "add nsw i32"));
 }
@@ -134,14 +116,8 @@ end:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": true,
-            "probability": 1.0
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // Use --mba flag directly
+    auto obfuscated = obfuscateIR(ir, "", "--mba");
     ASSERT_FALSE(obfuscated.empty());
 
     // Should still have basic structure
@@ -168,14 +144,8 @@ exit:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": true,
-            "probability": 1.0
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // Use --mba flag directly
+    auto obfuscated = obfuscateIR(ir, "", "--mba");
     ASSERT_FALSE(obfuscated.empty());
 
     // Should preserve phi nodes
@@ -207,14 +177,8 @@ entry:
 }
 )";
 
-    std::string config = R"({
-        "mba": {
-            "enabled": true,
-            "probability": 1.0
-        }
-    })";
-
-    auto obfuscated = obfuscateIR(ir, config);
+    // Use --mba flag directly
+    auto obfuscated = obfuscateIR(ir, "", "--mba");
     ASSERT_FALSE(obfuscated.empty());
 
     // Should have all function definitions

@@ -870,19 +870,19 @@ TEST_F(MBAMultTest, Decompose_Mul12) {
 }
 
 TEST_F(MBAMultTest, Decompose_Mul13) {
-    // 13 = 8 + 4 + 1 = (x << 3) + (x << 2) + x
+    // 13 = 16 - 2 - 1 = (x << 4) - (x << 1) - x (optimized form)
     std::string line = "  %result = mul i32 %x, 13";
     auto result = mult_transform.applyIR(line, 0, config);
 
     ASSERT_GE(result.size(), 3u);
     bool has_shl = false;
-    bool has_add = false;
+    bool has_sub = false;
     for (const auto& r : result) {
         if (r.find("shl") != std::string::npos) has_shl = true;
-        if (r.find("add") != std::string::npos) has_add = true;
+        if (r.find("sub") != std::string::npos) has_sub = true;
     }
     EXPECT_TRUE(has_shl);
-    EXPECT_TRUE(has_add);
+    EXPECT_TRUE(has_sub);
 }
 
 TEST_F(MBAMultTest, Decompose_Mul14) {
@@ -1092,25 +1092,30 @@ TEST_F(MBAXorIRTest, Variant4_OrAndNotOr) {
 }
 
 TEST_F(MBAXorIRTest, Variant5_OrXorAnd) {
-    // Variant 5: (a | b) ^ (a & b)
+    // Variant 5: (a | b) ^ (a & b) - expanded to avoid recursive XOR
+    // Computes: or(a|b, a&b) - and(a|b, a&b) which equals (a|b) ^ (a&b) = a^b
     std::string line = "  %result = xor i32 %a, %b";
     auto result = xor_transform.applyIR(line, 5, config);
 
-    ASSERT_EQ(3u, result.size());
-    EXPECT_TRUE(result[0].find(" = or ") != std::string::npos);
-    EXPECT_TRUE(result[1].find(" = and ") != std::string::npos);
-    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);
+    ASSERT_EQ(5u, result.size());
+    EXPECT_TRUE(result[0].find(" = or ") != std::string::npos);   // a | b
+    EXPECT_TRUE(result[1].find(" = and ") != std::string::npos);  // a & b
+    EXPECT_TRUE(result[2].find(" = or ") != std::string::npos);   // (a|b) | (a&b)
+    EXPECT_TRUE(result[3].find(" = and ") != std::string::npos);  // (a|b) & (a&b)
+    EXPECT_TRUE(result[4].find(" = sub ") != std::string::npos);  // difference = xor
 }
 
 TEST_F(MBAXorIRTest, DefaultVariant_OutOfRange) {
-    // Out of range should use default (variant 5)
+    // Out of range (99 % 8 = 3) uses variant 3: (~a & b) | (a & ~b)
     std::string line = "  %result = xor i32 %a, %b";
     auto result = xor_transform.applyIR(line, 99, config);
 
-    ASSERT_EQ(3u, result.size());
-    EXPECT_TRUE(result[0].find(" = or ") != std::string::npos);
-    EXPECT_TRUE(result[1].find(" = and ") != std::string::npos);
-    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);
+    ASSERT_EQ(5u, result.size());
+    EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~a
+    EXPECT_TRUE(result[1].find(" = and ") != std::string::npos);  // ~a & b
+    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // ~b
+    EXPECT_TRUE(result[3].find(" = and ") != std::string::npos);  // a & ~b
+    EXPECT_TRUE(result[4].find(" = or ") != std::string::npos);   // result
 }
 
 TEST_F(MBAXorIRTest, NonMatching_NotXor) {
@@ -1225,15 +1230,15 @@ TEST_F(MBAOrIRTest, Variant4_BPlusAAndNotB) {
     EXPECT_TRUE(result[2].find(" = add ") != std::string::npos);
 }
 
-TEST_F(MBAOrIRTest, Variant5_AndOrXor) {
-    // Variant 5: (a & b) | (a ^ b)
+TEST_F(MBAOrIRTest, Variant5_XorWithBitsOnlyInB) {
+    // Variant 5: a ^ (b & ~a) - XOR with bits only in b
     std::string line = "  %result = or i32 %a, %b";
     auto result = or_transform.applyIR(line, 5, config);
 
     ASSERT_EQ(3u, result.size());
-    EXPECT_TRUE(result[0].find(" = and ") != std::string::npos);
-    EXPECT_TRUE(result[1].find(" = xor ") != std::string::npos);
-    EXPECT_TRUE(result[2].find(" = or ") != std::string::npos);
+    EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~a
+    EXPECT_TRUE(result[1].find(" = and ") != std::string::npos);  // b & ~a
+    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // a ^ (b & ~a)
 }
 
 TEST_F(MBAOrIRTest, DefaultVariant_OutOfRange) {
@@ -1350,11 +1355,15 @@ TEST_F(MBAAndIRTest, Variant4_BMinusNotAAndB) {
 }
 
 TEST_F(MBAAndIRTest, DefaultVariant_OutOfRange) {
-    // Out of range should use default (variant 4)
+    // Out of range (99 % 8 = 3) uses variant 3: (a | b) & ~(a ^ b)
     std::string line = "  %result = and i32 %a, %b";
     auto result = and_transform.applyIR(line, 99, config);
 
-    ASSERT_EQ(3u, result.size());
+    ASSERT_EQ(4u, result.size());
+    EXPECT_TRUE(result[0].find(" = or ") != std::string::npos);   // a | b
+    EXPECT_TRUE(result[1].find(" = xor ") != std::string::npos);  // a ^ b
+    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // ~(a ^ b)
+    EXPECT_TRUE(result[3].find(" = and ") != std::string::npos);  // result
 }
 
 TEST_F(MBAAndIRTest, NonMatching_NotAnd) {
@@ -1405,23 +1414,10 @@ protected:
     }
 };
 
-TEST_F(MBASubIRTest, Variant0_XorMinus2NotAAndB) {
-    // Variant 0: (a ^ b) - 2 * (~a & b)
+TEST_F(MBASubIRTest, Variant0_TwosComplement) {
+    // Variant 0: a + (~b + 1) - two's complement
     std::string line = "  %result = sub i32 %a, %b";
     auto result = sub_transform.applyIR(line, 0, config);
-
-    ASSERT_EQ(5u, result.size());
-    EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // a ^ b
-    EXPECT_TRUE(result[1].find(" = xor ") != std::string::npos);  // ~a
-    EXPECT_TRUE(result[2].find(" = and ") != std::string::npos);  // ~a & b
-    EXPECT_TRUE(result[3].find(" = shl ") != std::string::npos);  // * 2
-    EXPECT_TRUE(result[4].find(" = sub ") != std::string::npos);
-}
-
-TEST_F(MBASubIRTest, Variant1_TwosComplement) {
-    // Variant 1: a + (~b + 1)
-    std::string line = "  %result = sub i32 %a, %b";
-    auto result = sub_transform.applyIR(line, 1, config);
 
     ASSERT_EQ(3u, result.size());
     EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~b
@@ -1429,15 +1425,28 @@ TEST_F(MBASubIRTest, Variant1_TwosComplement) {
     EXPECT_TRUE(result[2].find(" = add ") != std::string::npos);  // a + (-b)
 }
 
-TEST_F(MBASubIRTest, Variant2_NotNotAPlusB) {
-    // Variant 2: ~(~a + b)
+TEST_F(MBASubIRTest, Variant1_ComplementIdentity) {
+    // Variant 1: ~(~a + b) - complement identity
     std::string line = "  %result = sub i32 %a, %b";
-    auto result = sub_transform.applyIR(line, 2, config);
+    auto result = sub_transform.applyIR(line, 1, config);
 
     ASSERT_EQ(3u, result.size());
     EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // ~a
     EXPECT_TRUE(result[1].find(" = add ") != std::string::npos);  // ~a + b
-    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // NOT
+    EXPECT_TRUE(result[2].find(" = xor ") != std::string::npos);  // NOT result
+}
+
+TEST_F(MBASubIRTest, Variant2_XorMinus2NotAAndB) {
+    // Variant 2: (a ^ b) - 2 * (~a & b)
+    std::string line = "  %result = sub i32 %a, %b";
+    auto result = sub_transform.applyIR(line, 2, config);
+
+    ASSERT_EQ(5u, result.size());
+    EXPECT_TRUE(result[0].find(" = xor ") != std::string::npos);  // a ^ b
+    EXPECT_TRUE(result[1].find(" = xor ") != std::string::npos);  // ~a
+    EXPECT_TRUE(result[2].find(" = and ") != std::string::npos);  // ~a & b
+    EXPECT_TRUE(result[3].find(" = shl ") != std::string::npos);  // * 2
+    EXPECT_TRUE(result[4].find(" = sub ") != std::string::npos);
 }
 
 TEST_F(MBASubIRTest, Variant3_AAndNotBMinusNotAAndB) {
@@ -1488,7 +1497,8 @@ TEST_F(MBASubIRTest, DifferentType_i64) {
     std::string line = "  %result = sub i64 %a, %b";
     auto result = sub_transform.applyIR(line, 0, config);
 
-    ASSERT_EQ(5u, result.size());
+    // Variant 0 (two's complement) produces 3 instructions
+    ASSERT_EQ(3u, result.size());
     EXPECT_TRUE(result[0].find("i64") != std::string::npos);
 }
 
@@ -1496,19 +1506,22 @@ TEST_F(MBASubIRTest, WithNswFlag) {
     std::string line = "  %result = sub nsw i32 %a, %b";
     auto result = sub_transform.applyIR(line, 0, config);
 
-    ASSERT_EQ(5u, result.size());
+    // Variant 0 (two's complement) produces 3 instructions
+    ASSERT_EQ(3u, result.size());
 }
 
 TEST_F(MBASubIRTest, WithNuwFlag) {
     std::string line = "  %result = sub nuw i32 %a, %b";
     auto result = sub_transform.applyIR(line, 0, config);
 
-    ASSERT_EQ(5u, result.size());
+    // Variant 0 (two's complement) produces 3 instructions
+    ASSERT_EQ(3u, result.size());
 }
 
 TEST_F(MBASubIRTest, WithNswNuwFlags) {
     std::string line = "  %result = sub nsw nuw i32 %a, %b";
     auto result = sub_transform.applyIR(line, 0, config);
 
-    ASSERT_EQ(5u, result.size());
+    // Variant 0 (two's complement) produces 3 instructions
+    ASSERT_EQ(3u, result.size());
 }
