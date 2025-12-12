@@ -1,6 +1,6 @@
 # Morphect
 
-A code obfuscator that actually works across multiple languages.
+A compiler-level code obfuscation framework.
 
 ```
   __  __                  _               _
@@ -11,186 +11,190 @@ A code obfuscator that actually works across multiple languages.
                    |_|
 ```
 
-## What is this?
+---
 
-Morphect transforms your code into something that does the same thing but looks completely different. It works at the compiler level (GCC plugin, LLVM IR) so you can use it with C, C++, Rust, Zig, and basically anything that compiles through GCC or LLVM.
+## Overview
 
-The goal is to make reverse engineering painful without breaking your program.
+Morphect transforms compiled code into functionally equivalent but structurally complex output that resists reverse engineering. Operating at compiler intermediate representations (GCC GIMPLE and LLVM IR), it supports any language that compiles through these toolchains.
+
+The framework provides multiple obfuscation techniques that can be combined based on protection requirements and performance constraints.
+
+---
 
 ## Features
 
-**Arithmetic obfuscation (MBA)**
-- Turns `a + b` into stuff like `(a ^ b) + 2 * (a & b)`
-- Same result, way more confusing to analyze
-- Works on +, -, *, ^, &, |
+| Category | Techniques |
+|----------|------------|
+| Arithmetic | Mixed Boolean Arithmetic transforms simple operations into complex equivalents |
+| Control Flow | Flattening converts structured code to state machines; bogus branches add fake paths |
+| Data | String encryption, constant obfuscation, variable splitting |
+| Anti-Analysis | Dead code insertion, anti-debugging, anti-disassembly |
 
-**Control flow mess**
-- Flattening - turns your if/else into a giant switch-case state machine
-- Fake branches with opaque predicates (conditions that always evaluate the same but look complex)
-- Indirect jumps and calls through function pointers
+---
 
-**Data protection**
-- String encryption (XOR, rolling XOR, RC4)
-- Constants get split into computed expressions
-- Variables can be split into multiple parts
+## Quick Start
 
-**Anti-analysis**
-- Junk bytes that confuse disassemblers
-- Debugger detection (ptrace, timing checks, etc)
-- Dead code insertion
-
-## Quick start
-
-### As a GCC plugin
+### Building
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-
-# then just add it to your gcc command
-gcc -fplugin=./build/lib/morphect_plugin.so your_code.c -o output
+cmake --build build --parallel
 ```
 
-### With LLVM IR
+### LLVM IR Workflow
 
 ```bash
-cmake -B build -DMORPHECT_BUILD_IR_OBFUSCATOR=ON
-cmake --build build
+# Generate IR
+clang -S -emit-llvm -O0 source.c -o source.ll
 
-clang -S -emit-llvm -O0 code.c -o code.ll
-./build/bin/morphect-ir code.ll obfuscated.ll
-llc obfuscated.ll -o obfuscated.s
-gcc obfuscated.s -o output
+# Obfuscate
+./build/bin/morphect-ir --mba --cff source.ll obfuscated.ll
+
+# Compile
+clang obfuscated.ll -o program
 ```
+
+### GCC Plugin
+
+```bash
+gcc -fplugin=./build/lib/morphect_plugin.so source.c -o program
+```
+
+---
+
+## Command Line Options
+
+```
+morphect-ir [options] <input.ll> <output.ll>
+
+Passes:
+  --mba         Mixed Boolean Arithmetic
+  --cff         Control Flow Flattening
+  --bogus       Bogus Control Flow
+  --varsplit    Variable Splitting
+  --strenc      String Encoding
+  --deadcode    Dead Code Insertion
+  --all         Enable all passes
+
+Settings:
+  --config      JSON configuration file
+  --probability Transformation probability (0.0-1.0)
+  --verbose     Detailed output
+```
+
+---
 
 ## Configuration
 
-You can control everything through a JSON config file:
+Create a JSON configuration file for fine-grained control:
 
 ```json
 {
-  "obfuscation_settings": {
-    "global_probability": 0.85
+  "global": {
+    "probability": 0.85
   },
   "mba": {
     "enabled": true,
-    "chain_depth": 3
+    "chain_depth": 2
   },
-  "control_flow": {
-    "cff_enabled": true,
-    "bogus_cf_enabled": true
-  },
-  "data": {
-    "string_encoding": {
-      "enabled": true,
-      "method": "xor"
-    }
+  "cff": {
+    "enabled": true,
+    "max_blocks": 50
   }
 }
 ```
 
-Pass it like:
+Use with:
+
 ```bash
-gcc -fplugin=./build/lib/morphect_plugin.so \
-    -fplugin-arg-morphect_plugin-config=config.json \
-    code.c -o output
+morphect-ir --config config.json input.ll output.ll
 ```
 
-## Language support
+---
 
-| Language | How | Notes |
-|----------|-----|-------|
-| C/C++ | GCC plugin or LLVM | works great |
-| Rust | LLVM IR | emit-llvm then obfuscate |
-| Zig | LLVM IR | same deal |
-| Fortran | GCC plugin (gfortran) | yep |
-| Go | gccgo | works |
-| D | gdc or ldc | both work |
+## Language Support
 
-## Building
+Any language targeting GCC or LLVM:
 
-Requirements:
-- GCC 12+ with plugin headers
+| Language | Method |
+|----------|--------|
+| C, C++ | LLVM IR or GCC plugin |
+| Rust | `rustc --emit=llvm-ir` |
+| Zig | `zig build-obj -femit-llvm-ir` |
+| Go | gccgo with plugin |
+| Fortran | gfortran with plugin |
+
+---
+
+## Requirements
+
 - CMake 3.20+
-- C++17 compiler
+- C++17 compiler (GCC 12+ or Clang 14+)
+- GCC plugin headers (for GIMPLE support)
 
-```bash
-cmake -B build
-cmake --build build -j$(nproc)
+---
 
-# run tests
-ctest --test-dir build
-```
+## Performance Impact
 
-## How it works
-
-The basic idea is pretty simple - we hook into the compiler's intermediate representation and mess with it before it becomes machine code.
-
-For example, here's what MBA does to addition:
-
-```c
-// you write
-int result = a + b;
-
-// compiler sees (after obfuscation)
-int t1 = a ^ b;
-int t2 = a & b;
-int result = t1 + (t2 << 1);
-```
-
-Math checks out: `(a ^ b) + 2*(a & b) = a + b` for any integers.
-
-Control flow flattening is more involved - it takes your structured code and turns it into a while loop with a switch inside, using a state variable to decide which block runs next. Looks awful in a decompiler.
-
-## Performance impact
-
-Real talk: this will make your code slower and bigger.
-
-| What | How much |
-|------|----------|
-| Binary size | +8-20% |
-| Runtime | -2-8% slower |
+| Metric | Typical Change |
+|--------|----------------|
+| Binary size | +10-30% |
+| Runtime | +2-10% slower |
 | Compile time | +10-30% |
 
-Worth it if you need to protect your code. Not worth it for code that needs to be fast.
+Impact varies with configuration. Use probability settings and function exclusion to balance protection and performance.
 
-## What's next
+---
 
-Things I want to add:
+## Documentation
 
-- [ ] VM-based protection (like VMProtect but lighter)
-- [ ] Better control flow analysis to avoid breaking exception handling
-- [ ] Windows support for anti-debug (currently Linux-focused)
-- [ ] Function merging/cloning
-- [ ] Self-modifying code sections
-- [ ] Better docs and examples
-- [ ] Maybe a GUI config tool
+Complete documentation is available in the manual:
 
-If you want to help with any of this, PRs welcome.
+| Document | Description |
+|----------|-------------|
+| [Introduction](manual/00-introduction.md) | Overview and design philosophy |
+| [Building](manual/01-building.md) | Build requirements and procedures |
+| [Quick Start](manual/02-quickstart.md) | Basic usage examples |
+| [LLVM IR Tool](manual/03-llvm-ir.md) | morphect-ir reference |
+| [GCC Plugin](manual/04-gcc-plugin.md) | Plugin usage and integration |
+| [Techniques](manual/05-techniques.md) | How obfuscation methods work |
+| [Configuration](manual/06-configuration.md) | Complete configuration reference |
+| [Architecture](manual/07-architecture.md) | Internal design and extension |
+| [API Reference](manual/08-api.md) | Programmatic interface |
+| [Troubleshooting](manual/09-troubleshooting.md) | Common issues and solutions |
 
-## Project structure
+---
+
+## Project Structure
 
 ```
 src/
-  core/           - pass manager, base classes
-  common/         - logging, random, json parsing
-  backends/       - GCC plugin, LLVM tool, asm tool
+  core/           Pass management and base classes
+  common/         Logging, random, JSON parsing
   passes/
-    mba/          - arithmetic obfuscation
-    cff/          - control flow flattening
-    control_flow/ - indirect branches/calls
-    data/         - strings, constants
-    deadcode/     - dead code insertion
-    antidisasm/   - anti-disassembly
-    antidebug/    - debugger detection
-tests/            - unit tests, integration tests
-docs/             - detailed guides
+    mba/          Arithmetic obfuscation
+    cff/          Control flow flattening
+    control_flow/ Indirect branches and calls
+    data/         Strings, constants, variables
+    deadcode/     Dead code insertion
+    antidisasm/   Anti-disassembly
+    antidebug/    Debugger detection
+  backends/
+    gimple/       GCC plugin
+    llvm_ir/      LLVM IR tool
+    assembly/     Assembly tool
+tests/            Unit and integration tests
+manual/           Documentation
 ```
+
+---
 
 ## License
 
-Apache License v2
+Apache License, Version 2.0
+
+---
 
 ## Disclaimer
 
-This is for protecting legitimate software - think anti-piracy, protecting proprietary algorithms, etc. Don't use it for malware. That's not cool and probably illegal where you live.
+This software is intended for protecting legitimate software against reverse engineering. Use responsibly and in accordance with applicable laws.

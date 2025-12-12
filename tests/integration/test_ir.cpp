@@ -82,11 +82,11 @@ entry:
 }
 )";
 
-    // Without --mba, MBA is disabled - use empty extra_args to prevent default --mba
-    auto obfuscated = obfuscateIR(ir, "", "");
+    // With probability 0, MBA should be enabled but never transform
+    auto obfuscated = obfuscateIR(ir, "", "--mba --probability 0.0");
     ASSERT_FALSE(obfuscated.empty());
 
-    // Should be unchanged when no passes enabled
+    // Should be unchanged when probability is 0
     EXPECT_TRUE(irContains(obfuscated, "add i32") ||
                 irContains(obfuscated, "add nsw i32"));
 }
